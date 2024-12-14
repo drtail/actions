@@ -11,5 +11,5 @@ inputs:
     description: "slack bot token for messaging"
     required: true
 runs:
-  using: 'node16'
+  using: 'node18'
   main: 'dist/index.js'
