@@ -1,0 +1,15 @@
+name: 'Remind PR Review'
+description: 'Remind PR review requests by sending a slack DM'
+branding:
+  icon: "bell"
+  color: "green"
+inputs:
+  token:
+    description: "GitHub token"
+    required: true
+  slackBotToken:
+    description: "slack bot token for messaging"
+    required: true
+runs:
+  using: 'node16'
+  main: 'dist/index.js'
