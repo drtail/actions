@@ -22,14 +22,8 @@ This action does not produce any outputs.
 ### Usage
 
 ```yaml
-- name: Checkout certain repo
-  uses: actions/checkout@v4
-  with:
-    repository: 'drtail/actions'
-    ref: 'v0.1.0' # TODO: change to your version
-    path: './.github/actions/remind-pr-review'
 - name: Notify PR Review
-  uses: ./.github/actions/remind-pr-review
+  uses: drtail/actions/remind-pr-review@v1
   with:
     token: ${{ secrets.GITHUB_TOKEN }}
     slackBotToken: ${{ secrets.SLACK_BOT_TOKEN }}
