@@ -2,7 +2,7 @@ name: notify pr review
 
 on:
   pull_request:
-    types: [opened] # TODO: review_requested
+    types: [review_requested]
     
 jobs:
   notify:
