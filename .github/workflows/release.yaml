@@ -27,16 +27,14 @@ jobs:
       - name: Setup pnpm
         run: corepack enable pnpm
 
-      - name: Install dependencies
-        run: pnpm install
-
-      - name: Build each action
+      - name: Install and build each action
         run: |
           for action in $(find . -mindepth 2 -maxdepth 2 -type d ! -path './.github/workflows/*'); do
             if [ -f "$action/package.json" ]; then
-              cd $action && pnpm build
+              cd $action && pnpm install && pnpm build
             fi
           done
+
       - name: Add to tag
         run: |
           current_tag=$(echo $GITHUB_REF | sed 's/refs\/tags\///')
