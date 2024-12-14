@@ -29,11 +29,9 @@ jobs:
 
       - name: Install and build each action
         run: |
-          for action in $(find . -mindepth 2 -maxdepth 2 -type d ! -path './.github/workflows/*'); do
-            if [ -f "$action/package.json" ]; then
-              cd $action && pnpm install && pnpm build
-            fi
-          done
+          # TODO: build all actions
+          cd remind-pr-review && pnpm install && pnpm build
+
 
       - name: Add to tag
         run: |
