@@ -27,4 +27,7 @@ This action does not produce any outputs.
   with:
     token: ${{ secrets.GITHUB_TOKEN }}
     slackBotToken: ${{ secrets.SLACK_BOT_TOKEN }}
+    githubEmailToSlack: |
+      github_email@example.com:slack_member_id,
+      github_email2@example.com:slack_member_id2
 ```
