@@ -34,11 +34,20 @@ interface SlackMessageParams {
     labels: { name: string }[];
     title: string;
     url: string;
-    email: string;
+    email?: string;
+    slackMemberID?: string;
 }
 
-const sendSlack = async ({ repoName, labels, title, url, email }: SlackMessageParams): Promise<void> => {
-    const [name] = email.split("@");
+const sendReviewRequest = async ({ repoName, labels, title, url, email, slackMemberID }: SlackMessageParams): Promise<void> => {
+    let name: string;
+    if (slackMemberID) {
+        name = slackMemberID;
+    } else if (email) {
+        [name] = email.split("@");
+    } else {
+        throw new Error("Failed: 'slackMemberID' or 'email' is undefined.");
+    }
+
     const d0exists = labels.some((label: { name: string }) => label.name === D0);
 
     const response = await fetch("https://slack.com/api/chat.postMessage", {
@@ -114,6 +123,16 @@ interface Repository {
     full_name: string;
 }
 
+const parseEmailToSlackMemberIDMapping = (mappingString: string): Record<string, string> => {
+    return mappingString.split(',').reduce((acc, pair) => {
+        const [email, slack] = pair.split(':');
+        if (email && slack) {
+            acc[email.trim()] = slack.trim();
+        }
+        return acc;
+    }, {} as Record<string, string>);
+};
+
 (async () => {
     try {
         const {
@@ -150,9 +169,15 @@ interface Repository {
         core.info(`'${sender.login}' requests a pr review for ${title}(${prUrl})`);
         core.info(`Fetching information about '${login}'...`);
 
+        const githubEmailToSlackMapping = parseEmailToSlackMemberIDMapping(core.getInput("githubEmailToSlack"));
+        
+        // Fetch user email
         const { email } = await fetchUser(url);
 
-        core.info(`Sending a slack msg to '${login}'...`);
+        // Determine Slack username
+        const slackMemberID = githubEmailToSlackMapping[email] || email.split("@")[0];
+
+        core.info(`Sending a slack msg to '${slackMemberID}'...`);
 
         if (!email) {
             core.warning(`Failed: '${login}' has no public email.`);
@@ -169,7 +194,7 @@ interface Repository {
             throw new Error("Missing required information to send Slack message.");
         }
 
-        await sendSlack({ repoName, labels, title, url: prUrl, email });
+        await sendReviewRequest({ repoName, labels, title, url: prUrl, slackMemberID });
 
         core.info("Successfully sent");
         core.notice("Successfully sent");

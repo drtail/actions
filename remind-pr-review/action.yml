@@ -10,6 +10,10 @@ inputs:
   slackBotToken:
     description: "slack bot token for messaging"
     required: true
+  githubEmailToSlack:
+    description: "github email to slack member id mapping"
+    required: false
+    default: ""
 runs:
   using: 'node20'
   main: 'dist/index.js'
