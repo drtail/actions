@@ -6,19 +6,20 @@
 
 import * as core from '@actions/core';
 import * as github from '@actions/github';
+import { run } from './run';
 
 const ENCODE_PAIR: Record<string, string> = {
     "<": "&lt;",
     ">": "&gt;"
 };
 
-const encodeText = (text: string): string => text.replace(/[<>]/g, (matched: string) => ENCODE_PAIR[matched]);
+export const encodeText = (text: string): string => text.replace(/[<>]/g, (matched: string) => ENCODE_PAIR[matched]);
 
-const fetchUser = async (url: string): Promise<{ email: string }> => {
+export const fetchUser = async (url: string, token: string): Promise<{ email: string }> => {
     const response = await fetch(url, {
         method: "GET",
         headers: {
-            Authorization: `token ${core.getInput("token")}`
+            Authorization: `token ${token}`
         }
     });
     if (!response.ok) {
@@ -38,7 +39,7 @@ interface SlackMessageParams {
     slackMemberID?: string;
 }
 
-const sendReviewRequest = async ({ repoName, labels, title, url, email, slackMemberID }: SlackMessageParams): Promise<void> => {
+export const sendReviewRequest = async ({ repoName, labels, title, url, email, slackMemberID }: SlackMessageParams, slackBotToken: string): Promise<void> => {
     let name: string;
     if (slackMemberID) {
         name = slackMemberID;
@@ -53,7 +54,7 @@ const sendReviewRequest = async ({ repoName, labels, title, url, email, slackMem
     const response = await fetch("https://slack.com/api/chat.postMessage", {
         method: "POST",
         headers: {
-            Authorization: `Bearer ${core.getInput("slackBotToken")}`,
+            Authorization: `Bearer ${slackBotToken}`,
             "Content-Type": "application/json"
         },
         body: JSON.stringify({
@@ -123,7 +124,7 @@ interface Repository {
     full_name: string;
 }
 
-const parseEmailToSlackMemberIDMapping = (mappingString: string): Record<string, string> => {
+export const parseEmailToSlackMemberIDMapping = (mappingString: string): Record<string, string> => {
     return mappingString.split(',').reduce((acc, pair) => {
         const [email, slack] = pair.split(':');
         if (email && slack) {
@@ -133,7 +134,7 @@ const parseEmailToSlackMemberIDMapping = (mappingString: string): Record<string,
     }, {} as Record<string, string>);
 };
 
-(async () => {
+export const processPullRequest = async (token: string, slackBotToken: string, githubEmailToSlack: string): Promise<void> => {
     try {
         const {
             context: {
@@ -151,11 +152,10 @@ const parseEmailToSlackMemberIDMapping = (mappingString: string): Record<string,
                     } = {} as Repository
                 }
             }
-        } = github; 
+        } = github;
 
         if (!requestedReviewer) {
             core.notice(`Failed: 'requested_reviewer' does not exist. Looks like you've requested a team review which is not yet supported. The team name is '${requestedTeam.name}'.`);
-
             return;
         }
 
@@ -169,10 +169,10 @@ const parseEmailToSlackMemberIDMapping = (mappingString: string): Record<string,
         core.info(`'${sender.login}' requests a pr review for ${title}(${prUrl})`);
         core.info(`Fetching information about '${login}'...`);
 
-        const githubEmailToSlackMapping = parseEmailToSlackMemberIDMapping(core.getInput("githubEmailToSlack"));
-        
+        const githubEmailToSlackMapping = parseEmailToSlackMemberIDMapping(githubEmailToSlack);
+
         // Fetch user email
-        const { email } = await fetchUser(url);
+        const { email } = await fetchUser(url, token);
 
         // Determine Slack username
         const slackMemberID = githubEmailToSlackMapping[email] || email.split("@")[0];
@@ -182,7 +182,6 @@ const parseEmailToSlackMemberIDMapping = (mappingString: string): Record<string,
         if (!email) {
             core.warning(`Failed: '${login}' has no public email.`);
             core.notice(`Failed: '${login}' has no public email.`);
-
             return;
         }
 
@@ -194,11 +193,13 @@ const parseEmailToSlackMemberIDMapping = (mappingString: string): Record<string,
             throw new Error("Missing required information to send Slack message.");
         }
 
-        await sendReviewRequest({ repoName, labels, title, url: prUrl, slackMemberID });
+        await sendReviewRequest({ repoName, labels, title, url: prUrl, slackMemberID }, slackBotToken);
 
         core.info("Successfully sent");
         core.notice("Successfully sent");
     } catch (error: any) {
         core.setFailed(error.message);
     }
-})();
+};
+
+run();
