@@ -11,7 +11,7 @@ inputs:
     description: "slack bot token for messaging"
     required: true
   githubEmailToSlack:
-    description: "github email to slack member id mapping"
+    description: "github email to slack member id mapping, in the format of email:slack_id"
     required: false
     default: ""
 runs:
