@@ -10,10 +10,11 @@ This action sends a Slack DM to the PR reviewer when a PR is opened.
 
 #### Inputs
 
-| Name           | Description                        | Required | Default |
-|----------------|------------------------------------|----------|---------|
-| `token`        | GitHub token                       | true     |         |
-| `slackBotToken`| Slack bot token for messaging      | true     |         |
+|        Name        |                Description                | Required | Default |
+|--------------------|-------------------------------------------|----------|---------|
+|      `token`       |             GitHub token                  |   true   |         |
+|  `slackBotToken`   |    Slack bot token for messaging          |   true   |         |
+| `githubEmailToSlack`| Mapping of GitHub email to Slack member ID |  false   |         |
 
 #### Outputs
 

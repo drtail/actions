@@ -44,7 +44,8 @@ export const sendReviewRequest = async ({ repoName, labels, title, url, email, s
     if (slackMemberID) {
         name = slackMemberID;
     } else if (email) {
-        [name] = email.split("@");
+        const [username] = email.split("@");
+        name = `@${username}`;
     } else {
         throw new Error("Failed: 'slackMemberID' or 'email' is undefined.");
     }
@@ -58,7 +59,7 @@ export const sendReviewRequest = async ({ repoName, labels, title, url, email, s
             "Content-Type": "application/json"
         },
         body: JSON.stringify({
-            channel: `@${name}`,
+            channel: name,
             text: "You have a review request! 😊",
             blocks: [
                 {
@@ -125,7 +126,7 @@ interface Repository {
 }
 
 export const parseEmailToSlackMemberIDMapping = (mappingString: string): Record<string, string> => {
-    return mappingString.split(',').reduce((acc, pair) => {
+    return mappingString.split('\n').reduce((acc, pair) => {
         const [email, slack] = pair.split(':');
         if (email && slack) {
             acc[email.trim()] = slack.trim();
