@@ -24,8 +24,9 @@ export const run = async () => {
         return;
     }
 
-    const skipKeywordList = skip_keywords.split(',').map(keyword => keyword.trim());
-    if (skipKeywordList.some(keyword => pr.labels.some((label: { name: string }) => label.name.includes(keyword))) || skipKeywordList.some(keyword => prTitle.includes(keyword))) {
+    const skipKeywordList = skip_keywords.split(',').map(keyword => keyword.trim()).filter(keyword => keyword !== '');
+    const skipping = skipKeywordList.some(keyword => pr.labels.some((label: { name: string }) => label.name.includes(keyword))) || skipKeywordList.some(keyword => prTitle.includes(keyword))
+    if (skipping) {
         core.info(`Skipping PR #${pr.number} because it contains skip_keywords`);
         return;
     }
