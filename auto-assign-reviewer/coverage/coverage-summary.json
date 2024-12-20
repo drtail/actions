@@ -1,0 +1,3 @@
+{"total": {"lines":{"total":46,"covered":5,"skipped":0,"pct":10.86},"statements":{"total":54,"covered":7,"skipped":0,"pct":12.96},"functions":{"total":9,"covered":2,"skipped":0,"pct":22.22},"branches":{"total":15,"covered":0,"skipped":0,"pct":0},"branchesTrue":{"total":0,"covered":0,"skipped":0,"pct":"Unknown"}}
+,"/Users/humphrey/devs/company/actions/auto-assign-reviewer/src/run.ts": {"lines":{"total":46,"covered":5,"skipped":0,"pct":10.86},"functions":{"total":9,"covered":2,"skipped":0,"pct":22.22},"statements":{"total":54,"covered":7,"skipped":0,"pct":12.96},"branches":{"total":15,"covered":0,"skipped":0,"pct":0}}
+}
