@@ -1,0 +1,30 @@
+{
+  "name": "auto-assign-reviewer",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "private": true,
+  "dependencies": {
+    "@actions/core": "^1.11.0",
+    "@actions/github": "^6.0.0"
+  },
+  "devDependencies": {
+    "@tsconfig/recommended": "1.0.8",
+    "@types/jest": "29.5.14",
+    "@types/node": "20.17.10",
+    "@vercel/ncc": "^0.38.3",
+    "eslint": "9.17.0",
+    "prettier": "3.4.2",
+    "typescript": "5.7.2",
+    "typescript-eslint": "8.18.0"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

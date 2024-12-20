@@ -1,0 +1,31 @@
+name: auto-assign-reviewer
+description: auto-assign reviewer
+branding:
+  icon: "bell"
+  color: "green"
+inputs:
+  token:
+    description: "GitHub token"
+    required: true
+  reviewers:
+    description: "reviewers, in the format of github username"
+    required: true
+  random_reviewer:
+    description: "whether to randomly select a reviewer from the list"
+    required: false
+    default: "false"
+  add_reviewers:
+    description: "whether to add reviewers to pr"
+    required: false
+    default: "true"
+  add_assignee:
+    description: "whether to add assignee to pr"
+    required: false
+    default: "true"
+  skip_keywords:
+    description: "skip keywords, in the format of keyword1,keyword2"
+    required: false
+    default: ""
+runs:
+  using: 'node20'
+  main: 'dist/index.js'
