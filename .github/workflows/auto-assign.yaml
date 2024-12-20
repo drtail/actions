@@ -1,0 +1,17 @@
+name: Auto Assign Reviewer
+
+on:
+  pull_request:
+    types: [opened, reopened, closed]
+
+jobs:
+  assign-reviewer:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Auto Assign Reviewer
+        uses: drtail/actions/auto-assign-reviewer@v1
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          reviewers: EsmondCho,carey-drtail,ahnsv
+          random_reviewer: true
+
