@@ -4,7 +4,8 @@
   "description": "",
   "main": "index.js",
   "scripts": {
-    "test": "npx jest"
+    "test": "npx jest",
+    "build": "ncc build --source-map --license licenses.txt src/index.ts"
   },
   "keywords": [],
   "author": "",
