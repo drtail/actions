@@ -30,7 +30,8 @@ jobs:
       - name: Install and build each action
         run: |
           # TODO: build all actions
-          cd remind-pr-review && pnpm install && pnpm build
+          cd remind-pr-review && pnpm install && pnpm build && cd ..
+          cd auto-assign-reviewer && pnpm install && pnpm build && cd ..
 
 
       - name: Add to tag
