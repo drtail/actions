@@ -29,9 +29,14 @@ jobs:
 
       - name: Install and build each action
         run: |
-          # TODO: build all actions
-          cd remind-pr-review && pnpm install && pnpm build && cd ..
-          cd auto-assign-reviewer && pnpm install && pnpm build && cd ..
+          for dir in $(find . -maxdepth 2 -type f -name 'action.yml' -exec dirname {} \;); do
+            if [ -f "$dir/package.json" ] && [ -d "$dir/src" ]; then
+              cd $dir
+              pnpm install
+              pnpm build
+              cd -
+            fi
+          done
 
 
       - name: Add to tag
