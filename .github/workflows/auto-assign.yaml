@@ -25,4 +25,5 @@ jobs:
           token: ${{ secrets.GITHUB_TOKEN }}
           reviewers: EsmondCho,carey-drtail,ahnsv
           random_reviewer: true
+          skip_keywords: SKIP,skip
 

@@ -1,12 +1,14 @@
 import * as core from '@actions/core';
 import * as github from '@actions/github';
 
+const SKIP_LABEL = '⚠️ Skip Review';
+
 export const run = async () => {
     const token = core.getInput('token');
     const reviewers = core.getInput('reviewers').split(',').map(reviewer => reviewer.trim());
     const add_assignee = core.getInput('add_assignee'); // TODO: use this flag to determine if we should add assignee to pr
     const add_reviewers = core.getInput('add_reviewers'); // TODO: use this flag to determine if we should add reviewers to pr
-    const random_reviewer = core.getInput('random_reviewer'); 
+    const random_reviewer = core.getInput('random_reviewer');
     const skip_keywords = core.getInput('skip_keywords');
 
     const octokit = github.getOctokit(token);
@@ -27,6 +29,12 @@ export const run = async () => {
     const skipKeywordList = skip_keywords.split(',').map(keyword => keyword.trim()).filter(keyword => keyword !== '');
     const skipping = skipKeywordList.some(keyword => pr.labels.some((label: { name: string }) => label.name.includes(keyword))) || skipKeywordList.some(keyword => prTitle.includes(keyword))
     if (skipping) {
+        await octokit.rest.issues.addLabels({
+            owner: pr.base.repo.owner.login,
+            repo: pr.base.repo.name,
+            issue_number: pr.number,
+            labels: [SKIP_LABEL],
+        });
         core.info(`Skipping PR #${pr.number} because it contains skip_keywords`);
         return;
     }
@@ -49,6 +57,8 @@ export const run = async () => {
         core.setFailed(`Failed to add assignee: ${error}`);
         return;
     }
+
+
     // Select a reviewer who is not the PR creator
     const selectReviewer = (reviewers: string[], prCreator: string, random: boolean): string | null => {
         const nonCreatorReviewers = reviewers.filter(reviewer => reviewer !== prCreator);
