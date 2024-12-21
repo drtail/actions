@@ -29,13 +29,11 @@ jobs:
 
       - name: Install and build each action
         run: |
-          for dir in $(find . -maxdepth 2 -type f -name 'action.yml' -exec dirname {} \;); do
-            if [ -f "$dir/package.json" ] && [ -d "$dir/src" ]; then
-              cd $dir
-              pnpm install
-              pnpm build
-              cd -
-            fi
+          for dir in $(find . -type d \( -exec test -f '{}/package.json' \; -a -exec test -d '{}/src' \; -a \( -exec test -f '{}/action.yml' \; -o -exec test -f '{}/action.yaml' \; \) \) -print); do
+            cd $dir
+            pnpm install
+            pnpm build
+            cd -
           done
 
 
