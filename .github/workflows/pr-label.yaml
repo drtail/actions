@@ -1,0 +1,24 @@
+name: PR Labeler
+
+on:
+  pull_request:
+    types: [opened, reopened, ready_for_review]
+
+jobs:
+  pr-label:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - run: corepack enable pnpm
+      - run: cd pr-label && pnpm install
+      - run: cd pr-label && pnpm build
+      - name: Test PR Labeler
+        uses: ./pr-label
+        with:
+          labels: |
+            D-3
+          duplicate-patterns: |
+            D-*

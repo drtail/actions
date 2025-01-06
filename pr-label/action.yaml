@@ -1,0 +1,28 @@
+name: PR Labeler
+description: 'Adds labels to PRs based on their title and description'
+branding:
+  icon: 'bell'
+  color: 'green'
+inputs:
+  github-token:
+    description: 'GitHub token'
+    required: false
+    default: ${{ github.token }}
+  labels:
+    description: 'Labels to add to PRs. New line separated labels'
+    required: true
+    default: |
+      D-3
+  duplicate-patterns:
+    description: 'Glob patterns to check for duplicate PRs. New line separated patterns'
+    required: true
+    default: |
+      D-*
+
+runs:
+  using: 'node20'
+  main: 'dist/index.js'
+
+
+
+
