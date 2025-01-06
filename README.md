@@ -64,3 +64,31 @@ This action automatically assigns a reviewer to a PR based on the PR title.
     skip_keywords: keyword1,keyword2
     add_assignee: true
 ```
+
+## 3. pr-label
+### Description
+
+This action labels PRs based on the PR title and duplicate patterns.
+
+### Inputs and Outputs
+
+#### Inputs
+
+| Name | Description | Required | Default |
+|------|-------------|----------|---------|
+| token | GitHub token | true | |
+| labels | Labels to add to PRs | true | |
+| duplicate-patterns | Patterns to check for duplicate PRs | true | |
+
+### Usage
+
+```yaml
+- name: PR Labeler
+  uses: drtail/actions/pr-label@v1
+  with:
+    token: ${{ secrets.GITHUB_TOKEN }}
+    labels: |
+      D-3
+    duplicate-patterns: |
+      D-*
+```
