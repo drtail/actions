@@ -18,6 +18,7 @@ jobs:
       - name: Test PR Labeler
         uses: ./pr-label
         with:
+          token: ${{ secrets.GITHUB_TOKEN }}
           labels: |
             D-3
           duplicate-patterns: |
