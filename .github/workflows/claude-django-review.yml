@@ -1,4 +1,4 @@
-name: Claude Django Code Review (Reusable)
+name: Claude Django Code Review
 
 on:
   workflow_call:
