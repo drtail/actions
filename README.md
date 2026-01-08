@@ -120,7 +120,8 @@ This reusable workflow performs automated code reviews on Django backend pull re
 | Name | Description | Required |
 |------|-------------|----------|
 | ANTHROPIC_API_KEY | Anthropic API key for Claude access | true |
-| GITHUB_TOKEN | GitHub token for PR operations | true |
+
+**Note:** `GITHUB_TOKEN` is automatically provided by GitHub Actions and does not need to be passed explicitly.
 
 #### Outputs
 
@@ -143,7 +144,6 @@ jobs:
       review_language: 'Korean' # optional
     secrets:
       ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 ```
 
 ### Requirements
