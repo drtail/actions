@@ -13,6 +13,11 @@ on:
         required: false
         type: string
         default: 'Korean'
+      trigger_label:
+        description: 'Label name that triggers the review'
+        required: false
+        type: string
+        default: '🤖 AI Review'
     secrets:
       ANTHROPIC_API_KEY:
         required: true
@@ -20,7 +25,7 @@ on:
 jobs:
   claude-django-review:
     runs-on: ubuntu-latest
-    if: github.event.pull_request.draft == false
+    if: github.event.action == 'labeled' && github.event.label.name == inputs.trigger_label
     permissions:
       contents: read
       pull-requests: write
@@ -111,10 +116,22 @@ jobs:
 
             **Output Requirements:**
             - Write entire review in ${{ inputs.review_language }}
+            - Format each review item as a checkbox for easy tracking:
+              * Use `- [ ] Issue description` format for actionable items
+              * Group related items under category headings (e.g., "### 데이터베이스 쿼리 이슈")
+              * Include file:line references in each checkbox item
+              * Example format:
+                ```
+                ### 데이터베이스 쿼리 이슈
+                - [ ] consultation/views.py:45 - select_related('user') 추가하여 N+1 쿼리 해결
+                - [ ] pet/serializers.py:123 - 비효율적인 queryset iteration 수정
+
+                ### 아키텍처 이슈
+                - [ ] consultation/views.py:89 - 비즈니스 로직을 usecases.py로 이동
+                ```
             - Do NOT mention "CLAUDE.md" in your review output
             - Explain conventions directly as standard practices
-            - Use file:line format for all references
-            - Provide concrete code examples
+            - Provide concrete code examples where helpful
             - For query issues, trace the complete execution path with line numbers
 
             Save your ${{ inputs.review_language }} review to a file named '.claude-code-review-initial.md' using Write tool. Do NOT post to PR yet.
@@ -210,6 +227,24 @@ jobs:
             });
 
             console.log('Review posted successfully');
+
+      - name: Remove AI Review label
+        if: success() && github.event.action == 'labeled'
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            try {
+              await github.rest.issues.removeLabel({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                name: '${{ inputs.trigger_label }}'
+              });
+              console.log('Removed "${{ inputs.trigger_label }}" label after successful review');
+            } catch (error) {
+              console.log(`Failed to remove label: ${error.message}`);
+            }
 
       - name: Cleanup review files
         if: always()
