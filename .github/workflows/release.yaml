@@ -38,6 +38,7 @@ jobs:
 
 
       - name: Add to tag
+        if: startsWith(github.ref, 'refs/tags/v')
         run: |
           current_tag=$(echo $GITHUB_REF | sed 's/refs\/tags\///')
           echo "Current tag is $current_tag"
