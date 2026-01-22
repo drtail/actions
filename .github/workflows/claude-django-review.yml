@@ -50,7 +50,8 @@ jobs:
             });
 
             for (const comment of comments.data) {
-              if (comment.user.login === 'claude[bot]') {
+              // Filter by comment content instead of user login
+              if (comment.body && comment.body.includes('Claude Django Code Review')) {
                 try {
                   await github.graphql(`
                     mutation {
@@ -59,7 +60,7 @@ jobs:
                       }
                     }
                   `);
-                  console.log(`Minimized comment ${comment.id}`);
+                  console.log(`Minimized comment ${comment.id} by ${comment.user.login}`);
                 } catch (error) {
                   console.log(`Failed to minimize comment ${comment.id}: ${error.message}`);
                 }
