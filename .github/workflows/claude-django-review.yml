@@ -108,27 +108,52 @@ jobs:
                - Mocking: mocker: MockerFixture, verify with assert_called_once_with()
                - Coverage: All status codes (200, 400, 401, 403, 404)
 
+            **Priority Levels (Pn Rule):**
+            - **P1**: Critical bugs - security vulnerabilities, data loss, crashes (MUST fix)
+            - **P2**: Convention violations, performance issues requiring improvement (SHOULD fix)
+            - **P3**: Suggested improvements, better practices (COULD fix)
+            - **P4**: Minor suggestions, style preferences (CONSIDER)
+            - **P5**: Nitpicks, optional enhancements (FYI)
+
             **Review Decision Criteria:**
-            - Query inefficiency → REQUEST_CHANGES
-            - Architecture violation → REQUEST_CHANGES
-            - Security issue → REQUEST_CHANGES
-            - Minor improvements → COMMENT
+            - P1 or P2 issues found → REQUEST_CHANGES
+            - Only P3-P5 issues found → COMMENT
             - All good → APPROVE
 
             **Output Requirements:**
             - Write entire review in ${{ inputs.review_language }}
-            - Format each review item as a checkbox for easy tracking:
-              * Use `- [ ] Issue description` format for actionable items
-              * Group related items under category headings (e.g., "### 데이터베이스 쿼리 이슈")
-              * Include file:line references in each checkbox item
+            - Format each review item with the following structure:
+              * **[#N]** **Pn** as prefix (#N = sequential number from 1, Pn = priority P1-P5)
+              * Include file:line reference and issue description
+              * End each item with "확인: [ ]" for tracking
+              * Group related items under category headings
               * Example format:
                 ```
                 ### 데이터베이스 쿼리 이슈
-                - [ ] consultation/views.py:45 - select_related('user') 추가하여 N+1 쿼리 해결
-                - [ ] pet/serializers.py:123 - 비효율적인 queryset iteration 수정
+
+                **[#1]** **P2** `consultation/views.py:45`
+                select_related('user') 추가하여 N+1 쿼리 해결
+                - 확인: [ ]
+
+                **[#2]** **P2** `pet/serializers.py:123`
+                비효율적인 queryset iteration 수정
+                - 확인: [ ]
 
                 ### 아키텍처 이슈
-                - [ ] consultation/views.py:89 - 비즈니스 로직을 usecases.py로 이동
+
+                **[#3]** **P2** `consultation/views.py:89`
+                비즈니스 로직을 usecases.py로 이동
+                - 확인: [ ]
+
+                ### 개선 제안
+
+                **[#4]** **P3** `utils/helpers.py:20`
+                캐싱 적용 고려
+                - 확인: [ ]
+
+                **[#5]** **P4** `models.py:55`
+                변수명 개선 제안
+                - 확인: [ ]
                 ```
             - Do NOT mention "CLAUDE.md" in your review output
             - Explain conventions directly as standard practices
