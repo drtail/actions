@@ -124,7 +124,7 @@ jobs:
             - Write entire review in ${{ inputs.review_language }}
             - Start with review decision header (## ❌ REQUEST CHANGES / ## 💬 COMMENT / ## ✅ APPROVED)
             - Format each review item with the following structure:
-              * **Pn** + descriptive title summarizing the issue
+              * `[Pn]` badge + descriptive title summarizing the issue
               * Include file:line reference and detailed explanation in the body
               * Group related items under category headings
             - End with conclusion section restating the decision
@@ -138,25 +138,25 @@ jobs:
 
                 ### 데이터베이스 쿼리 이슈
 
-                **P2** select_related 누락으로 인한 N+1 쿼리
+                `[P2]` **select_related 누락으로 인한 N+1 쿼리**
                 `consultation/views.py:45` - User 조회 시 select_related('user') 추가 필요
 
-                **P2** 비효율적인 queryset iteration
+                `[P2]` **비효율적인 queryset iteration**
                 `pet/serializers.py:123` - list comprehension 대신 values_list 사용 권장
 
                 ### 아키텍처 이슈
 
-                **P2** View에 비즈니스 로직 포함
+                `[P2]` **View에 비즈니스 로직 포함**
                 `consultation/views.py:89` - 결제 처리 로직을 usecases.py로 이동 필요
 
                 ### 개선 제안
 
-                **P3** 캐싱 미적용
+                `[P3]` **캐싱 미적용**
                 `utils/helpers.py:20` - 자주 호출되는 설정값에 캐싱 적용 고려
 
                 ---
 
-                ## 결론: 🔴 REQUEST CHANGES
+                ## 결론: ❌ REQUEST CHANGES
 
                 P2 이슈 3건이 발견되어 수정 후 재검토가 필요합니다.
                 ```
