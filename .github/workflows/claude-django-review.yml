@@ -122,12 +122,20 @@ jobs:
 
             **Output Requirements:**
             - Write entire review in ${{ inputs.review_language }}
+            - Start with review decision header (## ❌ REQUEST CHANGES / ## 💬 COMMENT / ## ✅ APPROVED)
             - Format each review item with the following structure:
               * **Pn** + descriptive title summarizing the issue
               * Include file:line reference and detailed explanation in the body
               * Group related items under category headings
-              * Example format:
+            - End with conclusion section restating the decision
+            - Example format:
                 ```
+                ## ❌ REQUEST CHANGES
+
+                이 PR에는 반드시 수정이 필요한 P1/P2 이슈가 있습니다.
+
+                ---
+
                 ### 데이터베이스 쿼리 이슈
 
                 **P2** select_related 누락으로 인한 N+1 쿼리
@@ -146,8 +154,11 @@ jobs:
                 **P3** 캐싱 미적용
                 `utils/helpers.py:20` - 자주 호출되는 설정값에 캐싱 적용 고려
 
-                **P4** 변수명 개선
-                `models.py:55` - `d` 대신 `duration` 등 명확한 이름 사용 권장
+                ---
+
+                ## 결론: 🔴 REQUEST CHANGES
+
+                P2 이슈 3건이 발견되어 수정 후 재검토가 필요합니다.
                 ```
             - Do NOT mention "CLAUDE.md" in your review output
             - Explain conventions directly as standard practices
