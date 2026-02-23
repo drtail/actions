@@ -12,7 +12,7 @@ inputs:
   model:
     description: 'Claude model to use for code review'
     required: false
-    default: 'claude-sonnet-4'
+    default: 'claude-sonnet-4-6'
   review_language:
     description: 'Language for review output'
     required: false
@@ -59,10 +59,11 @@ runs:
           }
 
     - name: Generate Initial Django Code Review
-      uses: anthropics/claude-code-action@v1
+      uses: anthropics/claude-code-action@v1.0.55
       timeout-minutes: 15
       with:
         anthropic_api_key: ${{ inputs.anthropic_api_key }}
+        show_full_output: true
         prompt: |
           REPO: ${{ github.repository }}
           PR NUMBER: ${{ github.event.pull_request.number }}
@@ -160,10 +161,11 @@ runs:
         claude_args: '--model ${{ inputs.model }} --allowed-tools "Bash(gh pr diff:*),Bash(gh pr view:*),Bash(gh pr list:*),Write,Read,Glob,Grep"'
 
     - name: Verify Review Completeness
-      uses: anthropics/claude-code-action@v1
+      uses: anthropics/claude-code-action@v1.0.55
       timeout-minutes: 15
       with:
         anthropic_api_key: ${{ inputs.anthropic_api_key }}
+        show_full_output: true
         prompt: |
           REPO: ${{ github.repository }}
           PR NUMBER: ${{ github.event.pull_request.number }}
