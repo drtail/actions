@@ -60,7 +60,6 @@ runs:
 
     - name: Generate Initial Django Code Review
       uses: anthropics/claude-code-action@v1.0.55
-      timeout-minutes: 15
       with:
         anthropic_api_key: ${{ inputs.anthropic_api_key }}
         show_full_output: true
@@ -162,7 +161,6 @@ runs:
 
     - name: Verify Review Completeness
       uses: anthropics/claude-code-action@v1.0.55
-      timeout-minutes: 15
       with:
         anthropic_api_key: ${{ inputs.anthropic_api_key }}
         show_full_output: true
