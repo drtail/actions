@@ -7,7 +7,7 @@ on:
         description: 'Claude model to use for code review'
         required: false
         type: string
-        default: 'claude-sonnet-4'
+        default: 'claude-sonnet-4-6'
       review_language:
         description: 'Language for review output'
         required: false
