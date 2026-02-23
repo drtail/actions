@@ -68,11 +68,12 @@ jobs:
             }
 
       - name: Generate Initial Django Code Review
-        uses: anthropics/claude-code-action@v1
+        uses: anthropics/claude-code-action@v1.0.55
         timeout-minutes: 15
         continue-on-error: false
         with:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          show_full_output: true
           prompt: |
             REPO: ${{ github.repository }}
             PR NUMBER: ${{ github.event.pull_request.number }}
@@ -170,11 +171,12 @@ jobs:
           claude_args: '--model ${{ inputs.model }} --allowed-tools "Bash(gh pr diff:*),Bash(gh pr view:*),Bash(gh pr list:*),Write,Read,Glob,Grep"'
 
       - name: Verify Review Completeness
-        uses: anthropics/claude-code-action@v1
+        uses: anthropics/claude-code-action@v1.0.55
         timeout-minutes: 15
         continue-on-error: false
         with:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          show_full_output: true
           prompt: |
             REPO: ${{ github.repository }}
             PR NUMBER: ${{ github.event.pull_request.number }}
