@@ -155,6 +155,8 @@ runs:
           - Provide concrete code examples where helpful
           - For query issues, trace the complete execution path with line numbers
 
+          IMPORTANT: Never write files to /tmp/ or any directory outside the repository root. All file operations must use relative paths in the current working directory.
+
           Save your ${{ inputs.review_language }} review to a file named '.claude-code-review-initial.md' using Write tool. Do NOT post to PR yet.
 
         claude_args: '--model ${{ inputs.model }} --allowed-tools "Bash(gh pr diff:*),Bash(gh pr view:*),Bash(gh pr list:*),Write,Read,Glob,Grep"'
@@ -188,6 +190,8 @@ runs:
              - Specific file:line references provided
              - Concrete code examples given
              - Clear decision (APPROVE/COMMENT/REQUEST_CHANGES)
+
+          IMPORTANT: Never write files to /tmp/ or any directory outside the repository root. All file operations must use relative paths in the current working directory.
 
           **Your Actions:**
           - If review is incomplete or missed critical issues:
