@@ -28,7 +28,7 @@ runs:
     - name: Checkout repository
       uses: actions/checkout@v4
       with:
-        fetch-depth: 1
+        fetch-depth: 0
 
     - name: Minimize previous PR comments
       uses: actions/github-script@v7
@@ -38,19 +38,20 @@ runs:
           const comments = await github.rest.issues.listComments({
             owner: context.repo.owner,
             repo: context.repo.repo,
-            issue_number: context.issue.number
+            issue_number: context.issue.number,
+            per_page: 100
           });
 
           for (const comment of comments.data) {
             if (comment.body && comment.body.includes('Claude Django Code Review')) {
               try {
                 await github.graphql(`
-                  mutation {
-                    minimizeComment(input: {subjectId: "${comment.node_id}", classifier: OUTDATED}) {
+                  mutation($id: ID!) {
+                    minimizeComment(input: {subjectId: $id, classifier: OUTDATED}) {
                       clientMutationId
                     }
                   }
-                `);
+                `, { id: comment.node_id });
                 console.log(`Minimized comment ${comment.id} by ${comment.user.login}`);
               } catch (error) {
                 console.log(`Failed to minimize comment ${comment.id}: ${error.message}`);
@@ -58,8 +59,8 @@ runs:
             }
           }
 
-    - name: Generate Initial Django Code Review
-      uses: anthropics/claude-code-action@v1.0.55
+    - name: Generate Django Code Review
+      uses: anthropics/claude-code-action@v1
       with:
         anthropic_api_key: ${{ inputs.anthropic_api_key }}
         show_full_output: true
@@ -67,7 +68,8 @@ runs:
           REPO: ${{ github.repository }}
           PR NUMBER: ${{ github.event.pull_request.number }}
 
-          You are a senior Django backend engineer reviewing this PR. Read the project's CLAUDE.md file to understand conventions, then provide a thorough technical review.
+          You are a senior Django backend engineer reviewing this PR.
+          First, read the project's CLAUDE.md file (if it exists) to understand project-specific conventions, architecture patterns, and coding standards. Apply those conventions throughout your review.
 
           **Critical Analysis Areas (in priority order):**
 
@@ -77,15 +79,12 @@ runs:
              - Verify select_related/prefetch_related coverage matches actual usage
              - Check for inefficient patterns: redundant queries, unnecessary count(), missing bulk operations
              - Analyze queryset usage in EACH view method separately
-             - ⚠️ Test passing does NOT prove query efficiency!
-             - If tests don't validate query counts, recommend adding django_assert_num_queries
+             - Test passing does NOT prove query efficiency — recommend query count assertions where missing
 
-          2. **Architecture (per project standards):**
-             - Views: HTTP only, no business logic
-             - Serializers: Validation + CRUD only
-             - Usecases: Business logic
-             - Tasks: Async operations
-             - Flag violations as REQUEST_CHANGES
+          2. **Architecture (per project conventions):**
+             - Check CLAUDE.md for the project's layer responsibilities (e.g., views, serializers, services/usecases, tasks)
+             - Verify business logic is placed in the correct layer
+             - Flag any layer boundary violations
 
           3. **Security:**
              - Authentication/permission gaps
@@ -93,10 +92,10 @@ runs:
              - Sensitive data exposure
 
           4. **Test Quality:**
-             - Exceptions: assert_exception_response(response, DrTailAPIException subclasses)
-             - Enums: Use model enums, never hardcoded strings
-             - Mocking: mocker: MockerFixture, verify with assert_called_once_with()
-             - Coverage: All status codes (200, 400, 401, 403, 404)
+             - Follow project-specific test conventions from CLAUDE.md
+             - Check for proper exception handling assertions
+             - Verify use of model enums instead of hardcoded strings
+             - Verify coverage of key status codes (200, 400, 401, 403, 404)
 
           **Priority Levels (Pn Rule):**
           - **P1**: Critical bugs - security vulnerabilities, data loss, crashes (MUST fix)
@@ -118,132 +117,72 @@ runs:
             * Include file:line reference and detailed explanation in the body
             * Group related items under category headings
           - End with conclusion section restating the decision
-          - Example format:
+          - Example structure:
               ```
               ## ❌ REQUEST CHANGES
 
-              이 PR에는 반드시 수정이 필요한 P1/P2 이슈가 있습니다.
+              <Brief summary of why changes are requested>
 
               ---
 
-              ### 데이터베이스 쿼리 이슈
+              ### <Category>
 
-              `[P2]` **select_related 누락으로 인한 N+1 쿼리**
-              `consultation/views.py:45` - User 조회 시 select_related('user') 추가 필요
+              `[P2]` **<Issue title>**
+              `path/to/file.py:45` - <Explanation>
 
-              `[P2]` **비효율적인 queryset iteration**
-              `pet/serializers.py:123` - list comprehension 대신 values_list 사용 권장
+              `[P2]` **<Issue title>**
+              `path/to/file.py:123` - <Explanation>
 
-              ### 아키텍처 이슈
+              ### <Category>
 
-              `[P2]` **View에 비즈니스 로직 포함**
-              `consultation/views.py:89` - 결제 처리 로직을 usecases.py로 이동 필요
-
-              ### 개선 제안
-
-              `[P3]` **캐싱 미적용**
-              `utils/helpers.py:20` - 자주 호출되는 설정값에 캐싱 적용 고려
+              `[P3]` **<Issue title>**
+              `path/to/file.py:20` - <Explanation>
 
               ---
 
-              ## 결론: ❌ REQUEST CHANGES
+              ## <Conclusion header restating the decision>
 
-              P2 이슈 3건이 발견되어 수정 후 재검토가 필요합니다.
+              <Summary of issue counts and next steps>
               ```
           - Do NOT mention "CLAUDE.md" in your review output
           - Explain conventions directly as standard practices
           - Provide concrete code examples where helpful
           - For query issues, trace the complete execution path with line numbers
 
+          **Self-Check Before Finalizing:**
+          Before saving, verify your own review:
+          - Re-read the PR diff and confirm every changed file is covered
+          - Confirm all database queries are traced end-to-end
+          - Confirm no security issues were overlooked
+          - Confirm file:line references are accurate
+
           IMPORTANT: Never write files to /tmp/ or any directory outside the repository root. All file operations must use relative paths in the current working directory.
 
-          Save your ${{ inputs.review_language }} review to a file named '.claude-code-review-initial.md' using Write tool. Do NOT post to PR yet.
+          Save your ${{ inputs.review_language }} review to a file named '.claude-code-review.md' using Write tool. Do NOT post to PR yet.
 
         claude_args: '--model ${{ inputs.model }} --allowed-tools "Bash(gh pr diff:*),Bash(gh pr view:*),Bash(gh pr list:*),Write,Read,Glob,Grep"'
 
-    - name: Verify Review Completeness
-      uses: anthropics/claude-code-action@v1.0.55
-      with:
-        anthropic_api_key: ${{ inputs.anthropic_api_key }}
-        show_full_output: true
-        prompt: |
-          REPO: ${{ github.repository }}
-          PR NUMBER: ${{ github.event.pull_request.number }}
-
-          You are a senior review auditor. Your task is to verify that the initial code review is complete and thorough.
-
-          **Verification Checklist:**
-
-          1. Read the initial review from '.claude-code-review-initial.md'
-          2. Read the PR diff and compare against the review
-          3. Check if the review covers ALL these critical areas:
-             - Database query efficiency (N+1 queries, select_related/prefetch_related)
-             - Architecture violations (business logic in views, etc.)
-             - Security issues
-             - Test quality and coverage
-          4. Identify any missed critical issues:
-             - Files that were changed but not reviewed
-             - Database queries that weren't analyzed
-             - Missing security checks
-             - Incomplete test coverage analysis
-          5. Check review quality:
-             - Specific file:line references provided
-             - Concrete code examples given
-             - Clear decision (APPROVE/COMMENT/REQUEST_CHANGES)
-
-          IMPORTANT: Never write files to /tmp/ or any directory outside the repository root. All file operations must use relative paths in the current working directory.
-
-          **Your Actions:**
-          - If review is incomplete or missed critical issues:
-            * Add ONLY the missing review findings to '.claude-code-review-additional.md'
-            * Create '.claude-code-review-verification.md' with your verification report (for internal logging only)
-          - If review is thorough and complete:
-            * Create '.claude-code-review-verification.md' with verification confirmation (for internal logging only)
-          - Create '.claude-code-review-final.md' with ONLY the technical review content (initial + additional findings if any)
-          - DO NOT include verification results, meta-commentary, or "리뷰 검증 결과" sections in the final.md
-
-          **Output Requirements:**
-          - All content must be in ${{ inputs.review_language }}
-          - Use file:line format
-          - Be specific about what was missed (if anything)
-          - Keep verification results separate from technical review content
-
-        claude_args: '--model ${{ inputs.model }} --allowed-tools "Bash(gh pr diff:*),Bash(gh pr view:*),Read,Write,Glob,Grep"'
-
-    - name: Post Final Review to PR
+    - name: Post Review to PR
       uses: actions/github-script@v7
       with:
         github-token: ${{ inputs.github_token }}
         script: |
           const fs = require('fs');
 
-          let finalReview;
+          let review;
           try {
-            finalReview = fs.readFileSync('.claude-code-review-final.md', 'utf8');
+            review = fs.readFileSync('.claude-code-review.md', 'utf8');
           } catch (error) {
-            console.error('Failed to read .claude-code-review-final.md:', error);
+            console.error('Failed to read .claude-code-review.md:', error);
             core.setFailed('Review file not found. Claude review may have failed.');
             return;
-          }
-
-          if (fs.existsSync('.claude-code-review-verification.md')) {
-            const verification = fs.readFileSync('.claude-code-review-verification.md', 'utf8');
-            console.log('=== Internal Verification Report ===');
-            console.log(verification);
-            console.log('===================================');
-          }
-
-          let reviewStatus = '✅ 리뷰 완료';
-          if (fs.existsSync('.claude-code-review-additional.md')) {
-            reviewStatus = '⚠️ 추가 이슈 발견';
-            console.log('Additional issues were found during verification');
           }
 
           await github.rest.issues.createComment({
             owner: context.repo.owner,
             repo: context.repo.repo,
             issue_number: context.issue.number,
-            body: `## Claude Django Code Review ${reviewStatus}\n\n${finalReview}`
+            body: `## Claude Django Code Review\n\n${review}`
           });
 
           console.log('Review posted successfully');
@@ -270,5 +209,5 @@ runs:
       if: always()
       shell: bash
       run: |
-        rm -f .claude-code-review-*.md .claude-code-review-*.txt
+        rm -f .claude-code-review*.md
         echo "Cleaned up review files"
