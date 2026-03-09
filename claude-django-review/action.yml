@@ -21,6 +21,10 @@ inputs:
     description: 'Label name that triggers the review'
     required: false
     default: '🤖 AI Review'
+  allowed_bots:
+    description: 'Comma-separated list of bot names allowed to trigger review'
+    required: false
+    default: ''
 
 runs:
   using: 'composite'
@@ -63,6 +67,7 @@ runs:
       uses: anthropics/claude-code-action@v1
       with:
         anthropic_api_key: ${{ inputs.anthropic_api_key }}
+        allowed_bots: ${{ inputs.allowed_bots }}
         show_full_output: true
         prompt: |
           REPO: ${{ github.repository }}
