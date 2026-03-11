@@ -70,18 +70,19 @@ runs:
 
           Steps:
           1. Read the CLAUDE.md file to understand the project conventions
-          2. Create a Linear issue for this bug fix:
+          2. Analyze the Sentry issue using the Sentry MCP tool
+          3. Check New Relic logs around the error time for additional context (use run_nrql_query to search logs)
+          4. Understand the root cause from the stacktrace and logs
+          5. Create a Linear issue for this bug fix:
              - Team: DRT
              - Title: the Sentry error title
              - Project: choose the most relevant project by listing existing projects. If unsure, use "Backend Bugs"
-          3. Analyze the Sentry issue using the Sentry MCP tool
-          4. Check New Relic logs around the error time for additional context (use run_nrql_query to search logs)
-          5. Understand the root cause from the stacktrace and logs
           6. Read the relevant source files and fix the bug
-          7. Run tests to verify the fix doesn't break anything
-          8. Create a new branch using the Linear issue's branch name
-          9. Commit the fix with message: "[DRT-<number>] <description>"
-          10. Push the branch and create a PR with:
+          7. Run `ruff format` on all modified files to ensure code style compliance
+          8. Run tests to verify the fix doesn't break anything
+          9. Create a new branch using the Linear issue's branch name
+          10. Commit the fix with message: "[DRT-<number>] <description>"
+          11. Push the branch and create a PR with:
               - Title: "[DRT-<number>] Fix: <short description>"
               - Body following .github/pull_request_template.md, include Sentry URL in References
               - Checklist must include: "머지 후 Sentry 이슈 resolve"
@@ -90,6 +91,7 @@ runs:
           Important:
           - Follow the project conventions in CLAUDE.md
           - Write minimal, focused fixes - don't refactor unrelated code
+          - Run `ruff format` on modified files before committing
           - If you cannot determine the fix confidently, create a GitHub Issue explaining why instead of creating a PR
           - Always respond in Korean when commenting on issues or PRs
 
@@ -122,7 +124,7 @@ runs:
             }
           }
 
-        claude_args: '--model ${{ inputs.model }} --allowedTools "Read,Write,Edit,Bash,Glob,Grep,mcp__sentry__*,mcp__newrelic__*,mcp__linear__*,Bash(gh pr:*),Bash(gh issue:*),Bash(git:*),Bash(make:*)"'
+        claude_args: '--model ${{ inputs.model }} --allowedTools "Read,Write,Edit,Bash,Glob,Grep,mcp__sentry__*,mcp__newrelic__*,mcp__linear__*,Bash(gh pr:*),Bash(gh issue:*),Bash(git:*),Bash(make:*),Bash(ruff:*)"'
 
     - name: Notify Slack
       if: success() && inputs.slack_bot_token != '' && inputs.slack_channel_id != ''
@@ -132,18 +134,33 @@ runs:
         SLACK_CHANNEL_ID: ${{ inputs.slack_channel_id }}
         GH_TOKEN: ${{ github.token }}
       run: |
+        # Check for PR first, then GitHub Issue
         PR_URL=$(gh pr list --repo ${{ github.repository }} --state open --json url,title --jq '.[0].url // empty')
         PR_TITLE=$(gh pr list --repo ${{ github.repository }} --state open --json url,title --jq '.[0].title // empty')
-        if [ -z "$PR_URL" ]; then
-          echo "No open PR found, skipping Slack notification"
+
+        if [ -n "$PR_URL" ]; then
+          curl -s -X POST "https://slack.com/api/chat.postMessage" \
+            -H "Authorization: Bearer $SLACK_BOT_TOKEN" \
+            -H "Content-Type: application/json" \
+            -d "{
+              \"channel\": \"$SLACK_CHANNEL_ID\",
+              \"text\": \"🔧 AI Autofix PR이 생성되었습니다.\n<$PR_URL|$PR_TITLE>\",
+              \"unfurl_links\": false
+            }"
           exit 0
         fi
 
-        curl -s -X POST "https://slack.com/api/chat.postMessage" \
-          -H "Authorization: Bearer $SLACK_BOT_TOKEN" \
-          -H "Content-Type: application/json" \
-          -d "{
-            \"channel\": \"$SLACK_CHANNEL_ID\",
-            \"text\": \"🔧 AI Autofix PR이 생성되었습니다.\n<$PR_URL|$PR_TITLE>\",
-            \"unfurl_links\": false
-          }"
+        # Check for recently created GitHub Issue
+        ISSUE_URL=$(gh issue list --repo ${{ github.repository }} --state open --limit 1 --json url,title --jq '.[0].url // empty')
+        ISSUE_TITLE=$(gh issue list --repo ${{ github.repository }} --state open --limit 1 --json url,title --jq '.[0].title // empty')
+
+        if [ -n "$ISSUE_URL" ]; then
+          curl -s -X POST "https://slack.com/api/chat.postMessage" \
+            -H "Authorization: Bearer $SLACK_BOT_TOKEN" \
+            -H "Content-Type: application/json" \
+            -d "{
+              \"channel\": \"$SLACK_CHANNEL_ID\",
+              \"text\": \"📋 AI Autofix가 코드 수정 대신 GitHub Issue를 생성했습니다.\n<$ISSUE_URL|$ISSUE_TITLE>\",
+              \"unfurl_links\": false
+            }"
+        fi
