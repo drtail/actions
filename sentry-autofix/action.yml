@@ -1,0 +1,149 @@
+name: 'Sentry Autofix'
+description: 'AI-powered Sentry error auto-fix using Claude Code'
+author: 'drtail'
+
+inputs:
+  anthropic_api_key:
+    description: 'Anthropic API Key'
+    required: true
+  sentry_api_token:
+    description: 'Sentry API Token for issue analysis'
+    required: true
+  new_relic_api_key:
+    description: 'New Relic API Key for log analysis'
+    required: true
+  new_relic_account_id:
+    description: 'New Relic Account ID'
+    required: true
+  linear_api_key:
+    description: 'Linear API Key for issue creation'
+    required: true
+  slack_bot_token:
+    description: 'Slack Bot Token for notifications'
+    required: false
+    default: ''
+  slack_channel_id:
+    description: 'Slack channel ID for autofix notifications'
+    required: false
+    default: ''
+  model:
+    description: 'Claude model to use'
+    required: false
+    default: 'claude-opus-4-6'
+  sentry_issue_id:
+    description: 'Sentry issue short ID'
+    required: true
+  sentry_url:
+    description: 'Sentry issue URL'
+    required: true
+  error_title:
+    description: 'Error title from Sentry'
+    required: true
+  error_culprit:
+    description: 'Error culprit from Sentry'
+    required: false
+    default: ''
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+
+    - name: Run Claude Code Autofix
+      uses: anthropics/claude-code-action@v1
+      with:
+        anthropic_api_key: ${{ inputs.anthropic_api_key }}
+        prompt: |
+          REPO: ${{ github.repository }}
+
+          You are fixing a Sentry error for the ${{ github.event.repository.name }} project.
+
+          Sentry Issue: ${{ inputs.sentry_issue_id }}
+          Sentry URL: ${{ inputs.sentry_url }}
+          Error: ${{ inputs.error_title }}
+          Culprit: ${{ inputs.error_culprit }}
+
+          You have access to Sentry MCP and New Relic MCP tools.
+
+          Steps:
+          1. Read the CLAUDE.md file to understand the project conventions
+          2. Create a Linear issue for this bug fix:
+             - Team: DRT
+             - Title: the Sentry error title
+             - Project: choose the most relevant project by listing existing projects. If unsure, use "Backend Bugs"
+          3. Analyze the Sentry issue using the Sentry MCP tool
+          4. Check New Relic logs around the error time for additional context (use run_nrql_query to search logs)
+          5. Understand the root cause from the stacktrace and logs
+          6. Read the relevant source files and fix the bug
+          7. Run tests to verify the fix doesn't break anything
+          8. Create a new branch using the Linear issue's branch name
+          9. Commit the fix with message: "[DRT-<number>] <description>"
+          10. Push the branch and create a PR with:
+              - Title: "[DRT-<number>] Fix: <short description>"
+              - Body following .github/pull_request_template.md, include Sentry URL in References
+              - Checklist must include: "머지 후 Sentry 이슈 resolve"
+              - Label: 🤖 AI Review
+
+          Important:
+          - Follow the project conventions in CLAUDE.md
+          - Write minimal, focused fixes - don't refactor unrelated code
+          - If you cannot determine the fix confidently, create a GitHub Issue explaining why instead of creating a PR
+          - Always respond in Korean when commenting on issues or PRs
+
+        settings: |
+          {
+            "mcpServers": {
+              "sentry": {
+                "command": "npx",
+                "args": ["-y", "@sentry/mcp-server@latest"],
+                "env": {
+                  "SENTRY_AUTH_TOKEN": "${{ inputs.sentry_api_token }}"
+                }
+              },
+              "newrelic": {
+                "command": "npx",
+                "args": ["-y", "@newrelic/mcp-server@latest"],
+                "env": {
+                  "NEW_RELIC_API_KEY": "${{ inputs.new_relic_api_key }}",
+                  "NEW_RELIC_ACCOUNT_ID": "${{ inputs.new_relic_account_id }}",
+                  "NEW_RELIC_REGION": "US"
+                }
+              },
+              "linear": {
+                "command": "npx",
+                "args": ["-y", "@linear/mcp-server@latest"],
+                "env": {
+                  "LINEAR_API_KEY": "${{ inputs.linear_api_key }}"
+                }
+              }
+            }
+          }
+
+        claude_args: '--model ${{ inputs.model }} --allowedTools "Read,Write,Edit,Bash,Glob,Grep,mcp__sentry__*,mcp__newrelic__*,mcp__linear__*,Bash(gh pr:*),Bash(gh issue:*),Bash(git:*),Bash(make:*)"'
+
+    - name: Notify Slack
+      if: success() && inputs.slack_bot_token != '' && inputs.slack_channel_id != ''
+      shell: bash
+      env:
+        SLACK_BOT_TOKEN: ${{ inputs.slack_bot_token }}
+        SLACK_CHANNEL_ID: ${{ inputs.slack_channel_id }}
+        GH_TOKEN: ${{ github.token }}
+      run: |
+        PR_URL=$(gh pr list --repo ${{ github.repository }} --state open --json url,title --jq '.[0].url // empty')
+        PR_TITLE=$(gh pr list --repo ${{ github.repository }} --state open --json url,title --jq '.[0].title // empty')
+        if [ -z "$PR_URL" ]; then
+          echo "No open PR found, skipping Slack notification"
+          exit 0
+        fi
+
+        curl -s -X POST "https://slack.com/api/chat.postMessage" \
+          -H "Authorization: Bearer $SLACK_BOT_TOKEN" \
+          -H "Content-Type: application/json" \
+          -d "{
+            \"channel\": \"$SLACK_CHANNEL_ID\",
+            \"text\": \"🔧 AI Autofix PR이 생성되었습니다.\n<$PR_URL|$PR_TITLE>\",
+            \"unfurl_links\": false
+          }"
