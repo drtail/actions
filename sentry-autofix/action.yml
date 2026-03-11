@@ -144,7 +144,7 @@ runs:
             -H "Content-Type: application/json" \
             -d "{
               \"channel\": \"$SLACK_CHANNEL_ID\",
-              \"text\": \"🔧 AI Autofix PR이 생성되었습니다.\n<$PR_URL|$PR_TITLE>\",
+              \"text\": \"🔧 [${{ github.event.repository.name }}] AI Autofix PR이 생성되었습니다.\n<$PR_URL|$PR_TITLE>\",
               \"unfurl_links\": false
             }"
           exit 0
@@ -160,7 +160,7 @@ runs:
             -H "Content-Type: application/json" \
             -d "{
               \"channel\": \"$SLACK_CHANNEL_ID\",
-              \"text\": \"📋 AI Autofix가 코드 수정 대신 GitHub Issue를 생성했습니다.\n<$ISSUE_URL|$ISSUE_TITLE>\",
+              \"text\": \"📋 [${{ github.event.repository.name }}] AI Autofix가 코드 수정 대신 GitHub Issue를 생성했습니다.\n<$ISSUE_URL|$ISSUE_TITLE>\",
               \"unfurl_links\": false
             }"
         fi
