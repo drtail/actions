@@ -20,7 +20,7 @@ inputs:
   trigger_label:
     description: 'Label name that triggers the guide'
     required: false
-    default: '📖 Review Guide'
+    default: '📖 AI Review Guide'
 
 runs:
   using: 'composite'
