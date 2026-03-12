@@ -22,10 +22,6 @@ inputs:
     required: false
     default: '📖 Review Guide'
 
-branding:
-  icon: 'book-open'
-  color: 'blue'
-
 runs:
   using: 'composite'
   steps:
