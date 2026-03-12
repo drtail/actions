@@ -1,0 +1,198 @@
+name: 'PR Review Guide'
+description: 'AI-powered PR review guide that helps reviewers understand and navigate large PRs'
+author: 'drtail'
+
+inputs:
+  anthropic_api_key:
+    description: 'Anthropic API Key'
+    required: true
+  github_token:
+    description: 'GitHub Token for PR operations'
+    required: true
+  model:
+    description: 'Claude model to use'
+    required: false
+    default: 'claude-sonnet-4-6'
+  language:
+    description: 'Language for output'
+    required: false
+    default: 'Korean'
+  trigger_label:
+    description: 'Label name that triggers the guide'
+    required: false
+    default: '📖 Review Guide'
+
+branding:
+  icon: 'book-open'
+  color: 'blue'
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+
+    - name: Minimize previous guide comments
+      uses: actions/github-script@v7
+      with:
+        github-token: ${{ inputs.github_token }}
+        script: |
+          const comments = await github.rest.issues.listComments({
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            issue_number: context.issue.number,
+            per_page: 100
+          });
+
+          for (const comment of comments.data) {
+            if (comment.body && comment.body.includes('📖 PR Review Guide')) {
+              try {
+                await github.graphql(`
+                  mutation($id: ID!) {
+                    minimizeComment(input: {subjectId: $id, classifier: OUTDATED}) {
+                      clientMutationId
+                    }
+                  }
+                `, { id: comment.node_id });
+                console.log(`Minimized comment ${comment.id}`);
+              } catch (error) {
+                console.log(`Failed to minimize comment ${comment.id}: ${error.message}`);
+              }
+            }
+          }
+
+    - name: Generate Review Guide
+      uses: anthropics/claude-code-action@v1
+      with:
+        anthropic_api_key: ${{ inputs.anthropic_api_key }}
+        show_full_output: true
+        prompt: |
+          REPO: ${{ github.repository }}
+          PR NUMBER: ${{ github.event.pull_request.number }}
+
+          You are helping a code reviewer understand and navigate this PR efficiently.
+          Your goal is to produce a concise review guide that helps the reviewer start reviewing with confidence.
+
+          First, read the project's CLAUDE.md file (if it exists) to understand project conventions.
+
+          **Steps:**
+
+          1. Get the PR description and file list:
+             - `gh pr view ${{ github.event.pull_request.number }} --json title,body,additions,deletions,changedFiles`
+             - `gh pr diff ${{ github.event.pull_request.number }} --stat`
+
+          2. Read the changed files to understand what the PR actually does.
+
+          3. Write a review guide with the following sections:
+
+          ---
+
+          **Output Format (write in ${{ inputs.language }}):**
+
+          ```
+          ## Overview
+
+          (2-4 sentences explaining what this PR does. Go beyond the PR description — use your understanding of the actual code changes. Don't just repeat the description.)
+
+          ## Changes at a Glance
+
+          | Area | Files | What Changed |
+          |------|-------|-------------|
+          | (group name) | `file1.py`, `file2.py` | (1-line summary) |
+          | ... | ... | ... |
+
+          ## Recommended Reading Order
+
+          Read in this order for the smoothest understanding:
+
+          ### Step 1: (area name)
+          > (why read this first — 1 sentence)
+
+          Files: `path/to/file.py`, ...
+
+          (brief note on what to look for)
+
+          ### Step 2: (area name)
+          > (why this is next — 1 sentence)
+
+          Files: ...
+
+          (brief note)
+
+          ... (continue for all steps)
+
+          ## Key Review Points
+
+          Things the reviewer should pay special attention to:
+
+          - (point 1 — specific, actionable)
+          - (point 2)
+          - ...
+          ```
+
+          ---
+
+          **Guidelines:**
+          - The reading order should follow dependency direction: read what is depended ON first
+          - Group files by logical area (models, services, API, tests, etc.), not alphabetically
+          - Keep it concise. This is a navigation aid, not a full review.
+          - Don't review the code yourself — just guide the reviewer
+          - If the PR is small (<200 lines), keep the guide very brief
+          - Do NOT mention "CLAUDE.md" in your output
+          - Key Review Points should highlight areas where bugs or design issues are likely, not obvious things
+
+          IMPORTANT: Save output to '.pr-review-guide.md' using the Write tool. Do NOT post to PR.
+
+        claude_args: '--model ${{ inputs.model }} --allowed-tools "Bash(gh pr diff:*),Bash(gh pr view:*),Bash(gh pr list:*),Write,Read,Glob,Grep"'
+
+    - name: Post Guide to PR
+      uses: actions/github-script@v7
+      with:
+        github-token: ${{ inputs.github_token }}
+        script: |
+          const fs = require('fs');
+
+          let guide;
+          try {
+            guide = fs.readFileSync('.pr-review-guide.md', 'utf8');
+          } catch (error) {
+            console.error('Failed to read .pr-review-guide.md:', error);
+            core.setFailed('Guide file not found. Claude may have failed.');
+            return;
+          }
+
+          await github.rest.issues.createComment({
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            issue_number: context.issue.number,
+            body: `## 📖 PR Review Guide\n\n${guide}`
+          });
+
+          console.log('Review guide posted successfully');
+
+    - name: Remove trigger label
+      if: success()
+      uses: actions/github-script@v7
+      with:
+        github-token: ${{ inputs.github_token }}
+        script: |
+          try {
+            await github.rest.issues.removeLabel({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              name: '${{ inputs.trigger_label }}'
+            });
+            console.log('Removed trigger label');
+          } catch (error) {
+            console.log(`Failed to remove label: ${error.message}`);
+          }
+
+    - name: Cleanup
+      if: always()
+      shell: bash
+      run: |
+        rm -f .pr-review-guide*.md
+        echo "Cleaned up guide files"
