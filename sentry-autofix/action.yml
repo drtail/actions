@@ -135,18 +135,28 @@ runs:
         GH_TOKEN: ${{ github.token }}
       run: |
         # Check for PR first, then GitHub Issue
-        PR_URL=$(gh pr list --repo ${{ github.repository }} --state open --json url,title --jq '.[0].url // empty')
-        PR_TITLE=$(gh pr list --repo ${{ github.repository }} --state open --json url,title --jq '.[0].title // empty')
+        PR_INFO=$(gh pr list --repo ${{ github.repository }} --state open --json number,url,title --jq '.[0] // empty')
+        PR_NUMBER=$(echo "$PR_INFO" | jq -r '.number // empty')
+        PR_URL=$(echo "$PR_INFO" | jq -r '.url // empty')
+        PR_TITLE=$(echo "$PR_INFO" | jq -r '.title // empty')
 
         if [ -n "$PR_URL" ]; then
-          curl -s -X POST "https://slack.com/api/chat.postMessage" \
+          RESPONSE=$(curl -s -X POST "https://slack.com/api/chat.postMessage" \
             -H "Authorization: Bearer $SLACK_BOT_TOKEN" \
             -H "Content-Type: application/json" \
             -d "{
               \"channel\": \"$SLACK_CHANNEL_ID\",
               \"text\": \"🔧 [${{ github.event.repository.name }}] AI Autofix PR이 생성되었습니다.\n<$PR_URL|$PR_TITLE>\",
               \"unfurl_links\": false
-            }"
+            }")
+
+          SLACK_TS=$(echo "$RESPONSE" | jq -r '.ts // empty')
+          SLACK_CHANNEL=$(echo "$RESPONSE" | jq -r '.channel // empty')
+
+          if [ -n "$SLACK_TS" ] && [ -n "$PR_NUMBER" ]; then
+            gh pr comment "$PR_NUMBER" --repo ${{ github.repository }} \
+              --body "<!-- slack:${SLACK_CHANNEL}:${SLACK_TS} -->"
+          fi
           exit 0
         fi
 
