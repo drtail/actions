@@ -54,7 +54,43 @@ jobs:
       id-token: write
 
     steps:
+      - name: Check hourly rate limit
+        id: rate_limit
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SLACK_BOT_TOKEN: ${{ secrets.slack_bot_token }}
+          SLACK_CHANNEL_ID: ${{ inputs.slack_channel_id }}
+        run: |
+          CUTOFF=$(date -u -d '1 hour ago' +%Y-%m-%dT%H:%M:%SZ 2>/dev/null \
+            || date -u -v-1H +%Y-%m-%dT%H:%M:%SZ)
+
+          RECENT_COUNT=$(gh run list \
+            --repo ${{ github.repository }} \
+            --workflow "Sentry Autofix" \
+            --limit 20 \
+            --json createdAt \
+            --jq "[.[] | select(.createdAt > \"$CUTOFF\")] | length")
+
+          echo "Autofix runs in the last hour: $RECENT_COUNT"
+          echo "recent_count=$RECENT_COUNT" >> $GITHUB_OUTPUT
+
+          if [ "$RECENT_COUNT" -ge 5 ]; then
+            echo "rate_limited=true" >> $GITHUB_OUTPUT
+            if [ -n "$SLACK_BOT_TOKEN" ] && [ -n "$SLACK_CHANNEL_ID" ]; then
+              curl -s -X POST "https://slack.com/api/chat.postMessage" \
+                -H "Authorization: Bearer $SLACK_BOT_TOKEN" \
+                -H "Content-Type: application/json" \
+                -d "{
+                  \"channel\": \"$SLACK_CHANNEL_ID\",
+                  \"text\": \"⚠️ [${{ github.repository }}] Sentry Autofix rate limit 초과 (${RECENT_COUNT}회/시간). 인프라 이슈 가능성이 있습니다. 수동 확인이 필요합니다.\n Sentry: ${{ inputs.sentry_url }}\"
+                }"
+            fi
+          else
+            echo "rate_limited=false" >> $GITHUB_OUTPUT
+          fi
+
       - uses: drtail/actions/sentry-autofix@main
+        if: steps.rate_limit.outputs.rate_limited == 'false'
         with:
           anthropic_api_key: ${{ secrets.anthropic_api_key }}
           sentry_api_token: ${{ secrets.sentry_api_token }}
