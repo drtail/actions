@@ -52,6 +52,7 @@ jobs:
       pull-requests: write
       issues: write
       id-token: write
+      actions: read
 
     steps:
       - name: Check hourly rate limit
@@ -69,7 +70,8 @@ jobs:
             --workflow "Sentry Autofix" \
             --limit 20 \
             --json createdAt \
-            --jq "[.[] | select(.createdAt > \"$CUTOFF\")] | length")
+            --jq "[.[] | select(.createdAt > \"$CUTOFF\")] | length" 2>/dev/null || echo "0")
+          RECENT_COUNT=${RECENT_COUNT:-0}
 
           echo "Autofix runs in the last hour: $RECENT_COUNT"
           echo "recent_count=$RECENT_COUNT" >> $GITHUB_OUTPUT
