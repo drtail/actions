@@ -1,0 +1,44 @@
+name: Notify Slack on PR Merged
+
+on:
+  workflow_call:
+    secrets:
+      slack_bot_token:
+        required: true
+
+jobs:
+  notify:
+    if: github.event.pull_request.merged == true
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Find Slack TS from PR comments
+        id: find_slack
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          COMMENT=$(gh pr view ${{ github.event.pull_request.number }} \
+            --repo ${{ github.repository }} \
+            --json comments \
+            --jq '.comments[].body | select(startswith("<!-- slack:"))' | head -1)
+
+          if [ -n "$COMMENT" ]; then
+            CHANNEL=$(echo "$COMMENT" | sed 's/<!-- slack:\([^:]*\):\(.*\) -->/\1/')
+            TS=$(echo "$COMMENT" | sed 's/<!-- slack:\([^:]*\):\(.*\) -->/\2/')
+            echo "channel=$CHANNEL" >> $GITHUB_OUTPUT
+            echo "ts=$TS" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Add check reaction to Slack message
+        if: steps.find_slack.outputs.ts != ''
+        env:
+          SLACK_BOT_TOKEN: ${{ secrets.slack_bot_token }}
+        run: |
+          curl -s -X POST "https://slack.com/api/reactions.add" \
+            -H "Authorization: Bearer $SLACK_BOT_TOKEN" \
+            -H "Content-Type: application/json" \
+            -d "{
+              \"channel\": \"${{ steps.find_slack.outputs.channel }}\",
+              \"timestamp\": \"${{ steps.find_slack.outputs.ts }}\",
+              \"name\": \"white_check_mark\"
+            }"
