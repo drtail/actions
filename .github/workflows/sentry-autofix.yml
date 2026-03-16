@@ -1,0 +1,70 @@
+name: Sentry Autofix
+
+on:
+  workflow_call:
+    inputs:
+      new_relic_account_id:
+        required: true
+        type: string
+      slack_channel_id:
+        required: false
+        type: string
+        default: ''
+      model:
+        required: false
+        type: string
+        default: 'claude-opus-4-6'
+      sentry_issue_id:
+        required: true
+        type: string
+      sentry_url:
+        required: true
+        type: string
+      error_title:
+        required: true
+        type: string
+      error_culprit:
+        required: false
+        type: string
+        default: ''
+    secrets:
+      anthropic_api_key:
+        required: true
+      sentry_api_token:
+        required: true
+      new_relic_api_key:
+        required: true
+      linear_api_key:
+        required: true
+      slack_bot_token:
+        required: false
+
+concurrency:
+  group: sentry-autofix-${{ github.repository }}
+  cancel-in-progress: false
+
+jobs:
+  autofix:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: write
+      pull-requests: write
+      issues: write
+      id-token: write
+
+    steps:
+      - uses: drtail/actions/sentry-autofix@main
+        with:
+          anthropic_api_key: ${{ secrets.anthropic_api_key }}
+          sentry_api_token: ${{ secrets.sentry_api_token }}
+          new_relic_api_key: ${{ secrets.new_relic_api_key }}
+          new_relic_account_id: ${{ inputs.new_relic_account_id }}
+          linear_api_key: ${{ secrets.linear_api_key }}
+          slack_bot_token: ${{ secrets.slack_bot_token }}
+          slack_channel_id: ${{ inputs.slack_channel_id }}
+          model: ${{ inputs.model }}
+          sentry_issue_id: ${{ inputs.sentry_issue_id }}
+          sentry_url: ${{ inputs.sentry_url }}
+          error_title: ${{ inputs.error_title }}
+          error_culprit: ${{ inputs.error_culprit }}
