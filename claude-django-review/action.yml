@@ -34,121 +34,7 @@ runs:
       with:
         fetch-depth: 0
 
-    - name: Count rounds
-      id: count_rounds
-      uses: actions/github-script@v7
-      with:
-        github-token: ${{ inputs.github_token }}
-        script: |
-          let currentRound = 1;
-          let page = 1;
-          const maxPages = 3;
-
-          while (page <= maxPages) {
-            const comments = await github.rest.issues.listComments({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              issue_number: context.issue.number,
-              per_page: 100,
-              page: page
-            });
-
-            if (comments.data.length === 0) break;
-
-            for (const comment of comments.data) {
-              if (
-                comment.user.type === 'Bot' &&
-                comment.body &&
-                comment.body.includes('<!-- ai-review-round:')
-              ) {
-                currentRound++;
-              }
-            }
-
-            if (comments.data.length < 100) break;
-            page++;
-          }
-
-          core.setOutput('round_number', currentRound);
-          console.log(`Current round: ${currentRound}`);
-
-    - name: Check max rounds
-      id: check_max_rounds
-      uses: actions/github-script@v7
-      with:
-        github-token: ${{ inputs.github_token }}
-        script: |
-          const roundNumber = parseInt('${{ steps.count_rounds.outputs.round_number }}');
-
-          if (roundNumber > 5) {
-            await github.rest.issues.createComment({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              issue_number: context.issue.number,
-              body: '## 🔄 AI Review 최대 회차 초과\n\n5회차 리뷰가 완료되었습니다. 더 이상 자동 리뷰를 진행하지 않습니다. 개발자가 직접 검토해 주세요.'
-            });
-            console.log('Max rounds exceeded. Setting skip flag.');
-            core.setOutput('should_skip', 'true');
-          } else {
-            console.log(`Round ${roundNumber} - proceeding with review`);
-            core.setOutput('should_skip', 'false');
-          }
-
-    - name: Fetch previous reviews
-      id: fetch_previous_reviews
-      if: steps.check_max_rounds.outputs.should_skip != 'true'
-      uses: actions/github-script@v7
-      with:
-        github-token: ${{ inputs.github_token }}
-        script: |
-          let page = 1;
-          const maxPages = 3;
-          const reviewComments = [];
-
-          while (page <= maxPages) {
-            const comments = await github.rest.issues.listComments({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              issue_number: context.issue.number,
-              per_page: 100,
-              page: page
-            });
-
-            if (comments.data.length === 0) break;
-
-            for (const comment of comments.data) {
-              if (
-                comment.user.type === 'Bot' &&
-                comment.body &&
-                comment.body.includes('<!-- ai-review-round:')
-              ) {
-                const match = comment.body.match(/<!-- ai-review-round:\s*(\d+)\s*-->/);
-                const roundNum = match ? parseInt(match[1]) : 0;
-                reviewComments.push({ round: roundNum, body: comment.body });
-              }
-            }
-
-            if (comments.data.length < 100) break;
-            page++;
-          }
-
-          // Sort by round number and take the last 2
-          reviewComments.sort((a, b) => a.round - b.round);
-          const recent = reviewComments.slice(-2);
-
-          let combinedText = '';
-          for (const review of recent) {
-            const truncated = review.body.length > 3000
-              ? review.body.substring(0, 3000) + '...(truncated)'
-              : review.body;
-            combinedText += `[회차 ${review.round} 리뷰]\n${truncated}\n\n`;
-          }
-
-          core.setOutput('previous_reviews', combinedText);
-          console.log(`Fetched ${recent.length} previous review(s)`);
-
-    - name: Minimize old comments
-      if: steps.check_max_rounds.outputs.should_skip != 'true'
+    - name: Minimize previous PR comments
       uses: actions/github-script@v7
       with:
         github-token: ${{ inputs.github_token }}
@@ -177,60 +63,13 @@ runs:
             }
           }
 
-    - name: Parse ignore list
-      id: parse_ignore_list
-      if: steps.check_max_rounds.outputs.should_skip != 'true'
-      uses: actions/github-script@v7
-      with:
-        github-token: ${{ inputs.github_token }}
-        script: |
-          const body = context.payload.pull_request.body || '';
-          const items = [];
-
-          const sectionMatch = body.match(/## 🚫 AI Review Ignore([\s\S]*?)(?=\n## |$)/);
-          if (sectionMatch) {
-            const sectionContent = sectionMatch[1];
-            const lines = sectionContent.split('\n');
-            for (const line of lines) {
-              const trimmed = line.trim();
-              if (trimmed.startsWith('- [P2]')) {
-                items.push(trimmed);
-              }
-            }
-          }
-
-          core.setOutput('ignore_list', JSON.stringify(items));
-          console.log(`Parsed ${items.length} ignore item(s)`);
-
     - name: Generate Django Code Review
-      if: steps.check_max_rounds.outputs.should_skip != 'true'
       uses: anthropics/claude-code-action@v1
       with:
         anthropic_api_key: ${{ inputs.anthropic_api_key }}
         allowed_bots: ${{ inputs.allowed_bots }}
         show_full_output: true
         prompt: |
-          REVIEW CONTEXT:
-          - Current round: ${{ steps.count_rounds.outputs.round_number }}
-          - Previous reviews: ${{ steps.fetch_previous_reviews.outputs.previous_reviews }}
-          - Ignore list: ${{ steps.parse_ignore_list.outputs.ignore_list }}
-
-          SCOPE CHANGES FROM PREVIOUS VERSION:
-          - Do NOT report: code style/formatting issues (covered by Ruff)
-          - Do NOT report: type errors (covered by mypy)
-          - Do NOT report: module import direction violations (covered by import-linter)
-          - DO report: architectural violations that are NOT import direction (e.g., business logic in wrong layer, view code in service layer)
-          - DO report: N+1 queries, logic bugs, security issues, AC verification
-
-          If this is round 2+, focus on:
-          1. Whether previous P1/P2 issues have been resolved
-          2. New issues introduced since last review
-          3. Verifying ignore list items are acceptable for P2 (P1 CANNOT be ignored)
-
-          If PR description contains acceptance criteria (- [ ] format checkboxes), verify each AC item against the code changes.
-
-          ---
-
           REPO: ${{ github.repository }}
           PR NUMBER: ${{ github.event.pull_request.number }}
 
@@ -328,8 +167,7 @@ runs:
 
         claude_args: '--model ${{ inputs.model }} --allowed-tools "Bash(gh pr diff:*),Bash(gh pr view:*),Bash(gh pr list:*),Write,Read,Glob,Grep"'
 
-    - name: Post review with marker
-      if: steps.check_max_rounds.outputs.should_skip != 'true'
+    - name: Post Review to PR
       uses: actions/github-script@v7
       with:
         github-token: ${{ inputs.github_token }}
@@ -345,54 +183,14 @@ runs:
             return;
           }
 
-          const roundNumber = '${{ steps.count_rounds.outputs.round_number }}';
-
           await github.rest.issues.createComment({
             owner: context.repo.owner,
             repo: context.repo.repo,
             issue_number: context.issue.number,
-            body: `## Claude Django Code Review (Round ${roundNumber})\n\n${review}\n\n<!-- ai-review-round: ${roundNumber} -->`
+            body: `## Claude Django Code Review\n\n${review}`
           });
 
-          console.log(`Review posted successfully (Round ${roundNumber})`);
-
-    - name: Evaluate approve/reject
-      if: steps.check_max_rounds.outputs.should_skip != 'true'
-      uses: actions/github-script@v7
-      env:
-        IGNORE_LIST: ${{ steps.parse_ignore_list.outputs.ignore_list }}
-      with:
-        github-token: ${{ inputs.github_token }}
-        script: |
-          const fs = require('fs');
-
-          let review;
-          try {
-            review = fs.readFileSync('.claude-code-review.md', 'utf8');
-          } catch (error) {
-            console.log('Could not read review file for evaluation');
-            return;
-          }
-
-          const roundNumber = parseInt('${{ steps.count_rounds.outputs.round_number }}');
-          const hasP1 = /`\[P1\]`/.test(review);
-          const p2Count = (review.match(/`\[P2\]`/g) || []).length;
-          const ignoreList = JSON.parse(process.env.IGNORE_LIST || '[]');
-
-          console.log(`Round: ${roundNumber}, P1: ${hasP1}, P2 count: ${p2Count}, IgnoreItems: ${ignoreList.length}`);
-
-          // P1 is never ignorable; P2 can be ignored if ignore list covers all P2 items
-          if (roundNumber >= 2 && !hasP1 && (p2Count === 0 || p2Count <= ignoreList.length)) {
-            await github.rest.issues.createComment({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              issue_number: context.issue.number,
-              body: `## ✅ AI Review APPROVED\n\n${roundNumber}회차 리뷰 완료. P1 없음, P2 ${p2Count}건 (무시 사유 ${ignoreList.length}건). LGTM!`
-            });
-            console.log('APPROVED comment posted');
-          } else {
-            console.log('Not approved yet - issues remain or first round');
-          }
+          console.log('Review posted successfully');
 
     - name: Remove AI Review label
       if: success()
