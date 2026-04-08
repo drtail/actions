@@ -43,6 +43,10 @@ inputs:
     description: 'Error culprit from Sentry'
     required: false
     default: ''
+  extra_labels:
+    description: 'Additional labels to add to the PR (comma-separated)'
+    required: false
+    default: ''
 
 runs:
   using: 'composite'
@@ -86,7 +90,7 @@ runs:
               - Title: "[DRT-<number>] Fix: <short description>"
               - Body following .github/pull_request_template.md, include Sentry URL in References
               - Checklist must include: "머지 후 Sentry 이슈 resolve"
-              - Label: 🤖 AI Review
+              - Labels: 🤖 AI Review${{ inputs.extra_labels != '' && format(', {0}', inputs.extra_labels) || '' }}
 
           Important:
           - Follow the project conventions in CLAUDE.md

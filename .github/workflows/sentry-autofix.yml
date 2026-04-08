@@ -27,6 +27,10 @@ on:
         required: false
         type: string
         default: ''
+      extra_labels:
+        required: false
+        type: string
+        default: ''
     secrets:
       anthropic_api_key:
         required: true
@@ -106,3 +110,4 @@ jobs:
           sentry_url: ${{ inputs.sentry_url }}
           error_title: ${{ inputs.error_title }}
           error_culprit: ${{ inputs.error_culprit }}
+          extra_labels: ${{ inputs.extra_labels }}
