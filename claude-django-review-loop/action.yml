@@ -1,0 +1,398 @@
+name: 'Claude Django Code Review (Loop)'
+description: 'AI-powered Django code review with review-reflect-re-review loop (min 2, max 5 rounds)'
+author: 'drtail'
+
+inputs:
+  anthropic_api_key:
+    description: 'Anthropic API Key'
+    required: true
+  github_token:
+    description: 'GitHub Token for PR operations'
+    required: true
+  model:
+    description: 'Claude model to use for code review'
+    required: false
+    default: 'claude-sonnet-4-6'
+  review_language:
+    description: 'Language for review output'
+    required: false
+    default: 'Korean'
+  trigger_label:
+    description: 'Label name that triggers the review'
+    required: false
+    default: '🤖 AI Review'
+  allowed_bots:
+    description: 'Comma-separated list of bot names allowed to trigger review'
+    required: false
+    default: ''
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+
+    - name: Count rounds
+      id: count_rounds
+      uses: actions/github-script@v7
+      with:
+        github-token: ${{ inputs.github_token }}
+        script: |
+          let currentRound = 1;
+          let page = 1;
+          const maxPages = 3;
+
+          while (page <= maxPages) {
+            const comments = await github.rest.issues.listComments({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              per_page: 100,
+              page: page
+            });
+
+            if (comments.data.length === 0) break;
+
+            for (const comment of comments.data) {
+              if (
+                comment.user.type === 'Bot' &&
+                comment.body &&
+                comment.body.includes('<!-- ai-review-round:')
+              ) {
+                currentRound++;
+              }
+            }
+
+            if (comments.data.length < 100) break;
+            page++;
+          }
+
+          core.setOutput('round_number', currentRound);
+          console.log(`Current round: ${currentRound}`);
+
+    - name: Check max rounds
+      id: check_max_rounds
+      uses: actions/github-script@v7
+      with:
+        github-token: ${{ inputs.github_token }}
+        script: |
+          const roundNumber = parseInt('${{ steps.count_rounds.outputs.round_number }}');
+
+          if (roundNumber > 5) {
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body: '## 🔄 AI Review 최대 회차 초과\n\n5회차 리뷰가 완료되었습니다. 더 이상 자동 리뷰를 진행하지 않습니다. 개발자가 직접 검토해 주세요.'
+            });
+            console.log('Max rounds exceeded. Setting skip flag.');
+            core.setOutput('should_skip', 'true');
+          } else {
+            console.log(`Round ${roundNumber} - proceeding with review`);
+            core.setOutput('should_skip', 'false');
+          }
+
+    - name: Fetch previous reviews
+      id: fetch_previous_reviews
+      if: steps.check_max_rounds.outputs.should_skip != 'true'
+      uses: actions/github-script@v7
+      with:
+        github-token: ${{ inputs.github_token }}
+        script: |
+          let page = 1;
+          const maxPages = 3;
+          const reviewComments = [];
+
+          while (page <= maxPages) {
+            const comments = await github.rest.issues.listComments({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              per_page: 100,
+              page: page
+            });
+
+            if (comments.data.length === 0) break;
+
+            for (const comment of comments.data) {
+              if (
+                comment.user.type === 'Bot' &&
+                comment.body &&
+                comment.body.includes('<!-- ai-review-round:')
+              ) {
+                const match = comment.body.match(/<!-- ai-review-round:\s*(\d+)\s*-->/);
+                const roundNum = match ? parseInt(match[1]) : 0;
+                reviewComments.push({ round: roundNum, body: comment.body });
+              }
+            }
+
+            if (comments.data.length < 100) break;
+            page++;
+          }
+
+          reviewComments.sort((a, b) => a.round - b.round);
+          const recent = reviewComments.slice(-2);
+
+          let combinedText = '';
+          for (const review of recent) {
+            const truncated = review.body.length > 3000
+              ? review.body.substring(0, 3000) + '...(truncated)'
+              : review.body;
+            combinedText += `[회차 ${review.round} 리뷰]\n${truncated}\n\n`;
+          }
+
+          core.setOutput('previous_reviews', combinedText);
+          console.log(`Fetched ${recent.length} previous review(s)`);
+
+    - name: Minimize old comments
+      if: steps.check_max_rounds.outputs.should_skip != 'true'
+      uses: actions/github-script@v7
+      with:
+        github-token: ${{ inputs.github_token }}
+        script: |
+          let page = 1;
+          const maxPages = 3;
+
+          while (page <= maxPages) {
+            const comments = await github.rest.issues.listComments({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              per_page: 100,
+              page: page
+            });
+
+            if (comments.data.length === 0) break;
+
+            for (const comment of comments.data) {
+              if (comment.body && comment.body.includes('Claude Django Code Review')) {
+                try {
+                  await github.graphql(`
+                    mutation($id: ID!) {
+                      minimizeComment(input: {subjectId: $id, classifier: OUTDATED}) {
+                        clientMutationId
+                      }
+                    }
+                  `, { id: comment.node_id });
+                  console.log(`Minimized comment ${comment.id} by ${comment.user.login}`);
+                } catch (error) {
+                  console.log(`Failed to minimize comment ${comment.id}: ${error.message}`);
+                }
+              }
+            }
+
+            if (comments.data.length < 100) break;
+            page++;
+          }
+
+    - name: Parse ignore list
+      id: parse_ignore_list
+      if: steps.check_max_rounds.outputs.should_skip != 'true'
+      uses: actions/github-script@v7
+      with:
+        github-token: ${{ inputs.github_token }}
+        script: |
+          const body = context.payload.pull_request.body || '';
+          const items = [];
+
+          const sectionMatch = body.match(/# 🚫 AI Review Ignore([\s\S]*?)(?=\n# |$)/);
+          if (sectionMatch) {
+            const sectionContent = sectionMatch[1];
+            const lines = sectionContent.split('\n');
+            for (const line of lines) {
+              const trimmed = line.trim();
+              if (trimmed.startsWith('- [P2]')) {
+                items.push(trimmed);
+              }
+            }
+          }
+
+          core.setOutput('ignore_list', JSON.stringify(items));
+          core.setOutput('ignore_count', items.length.toString());
+          console.log(`Parsed ${items.length} ignore item(s)`);
+
+    - name: Generate Django Code Review
+      if: steps.check_max_rounds.outputs.should_skip != 'true'
+      uses: anthropics/claude-code-action@v1
+      with:
+        anthropic_api_key: ${{ inputs.anthropic_api_key }}
+        allowed_bots: ${{ inputs.allowed_bots }}
+        show_full_output: true
+        prompt: |
+          REVIEW CONTEXT:
+          - Current round: ${{ steps.count_rounds.outputs.round_number }}
+          - Previous reviews: ${{ steps.fetch_previous_reviews.outputs.previous_reviews }}
+          - Ignore list (P2 items author marked as acceptable): ${{ steps.parse_ignore_list.outputs.ignore_list }}
+
+          SCOPE — Items already covered by automated tools (DO NOT report these):
+          - Code style/formatting → covered by Ruff
+          - Type errors → covered by mypy
+          - Module import direction violations → covered by import-linter
+          DO report: architectural violations beyond import direction (e.g., business logic in wrong layer), N+1 queries, logic bugs, security issues.
+
+          If round 2+, focus on:
+          1. Whether previous P1/P2 issues have been resolved
+          2. New issues introduced since last review
+          3. P1 items in ignore list are invalid — flag them
+
+          If PR description contains acceptance criteria (- [ ] checkboxes), verify each AC item against the code changes.
+
+          ---
+
+          REPO: ${{ github.repository }}
+          PR NUMBER: ${{ github.event.pull_request.number }}
+
+          You are a senior Django backend engineer reviewing this PR.
+          First, read the project's CLAUDE.md file (if it exists) to understand project-specific conventions, architecture patterns, and coding standards. Apply those conventions throughout your review.
+
+          **Critical Analysis Areas (in priority order):**
+
+          1. **Database Query Efficiency (HIGHEST PRIORITY):**
+             - Trace complete query execution paths: ViewSet.queryset → Serializer → nested Serializers → SerializerMethodField
+             - Identify ALL N+1 queries by checking every ForeignKey/relation access
+             - Verify select_related/prefetch_related coverage matches actual usage
+             - Check for inefficient patterns: redundant queries, unnecessary count(), missing bulk operations
+             - Analyze queryset usage in EACH view method separately
+             - Test passing does NOT prove query efficiency — recommend query count assertions where missing
+
+          2. **Architecture (per project conventions):**
+             - Check CLAUDE.md for the project's layer responsibilities (e.g., views, serializers, services/usecases, tasks)
+             - Verify business logic is placed in the correct layer
+             - Flag any layer boundary violations
+
+          3. **Security:**
+             - Authentication/permission gaps
+             - SQL injection, XSS risks
+             - Sensitive data exposure
+
+          4. **Test Quality:**
+             - Follow project-specific test conventions from CLAUDE.md
+             - Check for proper exception handling assertions
+             - Verify use of model enums instead of hardcoded strings
+             - Verify coverage of key status codes (200, 400, 401, 403, 404)
+
+          **Priority Levels (Pn Rule):**
+          - **P1**: Critical bugs - security vulnerabilities, data loss, crashes (MUST fix)
+          - **P2**: Convention violations, performance issues requiring improvement (SHOULD fix)
+          - **P3**: Suggested improvements, better practices (COULD fix)
+          - **P4**: Minor suggestions, style preferences (CONSIDER)
+          - **P5**: Nitpicks, optional enhancements (FYI)
+
+          **Review Decision Criteria:**
+          - P1 or P2 issues found → REQUEST_CHANGES
+          - Only P3-P5 issues found → COMMENT
+          - All good → APPROVE
+
+          **Output Requirements:**
+          - Write entire review in ${{ inputs.review_language }}
+          - Start with review decision header (## ❌ REQUEST CHANGES / ## 💬 COMMENT / ## ✅ APPROVED)
+          - Format each review item: `` `[Pn]` `` badge (backtick-wrapped) + descriptive title, file:line reference, explanation
+          - Group related items under category headings
+          - End with conclusion section restating the decision
+          - Do NOT mention "CLAUDE.md" in your review output
+          - Provide concrete code examples where helpful
+
+          **Self-Check Before Finalizing:**
+          - Re-read the PR diff and confirm every changed file is covered
+          - Confirm all database queries are traced end-to-end
+          - Confirm no security issues were overlooked
+          - Confirm file:line references are accurate
+
+          IMPORTANT: Never write files to /tmp/ or any directory outside the repository root.
+
+          Save your ${{ inputs.review_language }} review to a file named '.claude-code-review.md' using Write tool. Do NOT post to PR yet.
+
+        claude_args: '--model ${{ inputs.model }} --allowed-tools "Bash(gh pr diff:*),Bash(gh pr view:*),Bash(gh pr list:*),Write,Read,Glob,Grep"'
+
+    - name: Post review with marker
+      if: steps.check_max_rounds.outputs.should_skip != 'true'
+      uses: actions/github-script@v7
+      with:
+        github-token: ${{ inputs.github_token }}
+        script: |
+          const fs = require('fs');
+
+          let review;
+          try {
+            review = fs.readFileSync('.claude-code-review.md', 'utf8');
+          } catch (error) {
+            console.error('Failed to read .claude-code-review.md:', error);
+            core.setFailed('Review file not found. Claude review may have failed.');
+            return;
+          }
+
+          const roundNumber = '${{ steps.count_rounds.outputs.round_number }}';
+
+          await github.rest.issues.createComment({
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            issue_number: context.issue.number,
+            body: `## Claude Django Code Review (Round ${roundNumber})\n\n${review}\n\n<!-- ai-review-round: ${roundNumber} -->`
+          });
+
+          console.log(`Review posted successfully (Round ${roundNumber})`);
+
+    - name: Evaluate approve/reject
+      if: steps.check_max_rounds.outputs.should_skip != 'true'
+      uses: actions/github-script@v7
+      env:
+        IGNORE_COUNT: ${{ steps.parse_ignore_list.outputs.ignore_count }}
+      with:
+        github-token: ${{ inputs.github_token }}
+        script: |
+          const fs = require('fs');
+
+          let review;
+          try {
+            review = fs.readFileSync('.claude-code-review.md', 'utf8');
+          } catch (error) {
+            console.log('Could not read review file for evaluation');
+            return;
+          }
+
+          const roundNumber = parseInt('${{ steps.count_rounds.outputs.round_number }}');
+          const hasP1 = /`\[P1\]`/.test(review);
+          const p2Count = (review.match(/`\[P2\]`/g) || []).length;
+          const ignoreCount = parseInt(process.env.IGNORE_COUNT || '0');
+
+          console.log(`Round: ${roundNumber}, P1: ${hasP1}, P2 count: ${p2Count}, IgnoreCount: ${ignoreCount}`);
+
+          // P1 is never ignorable; approve when round >= 2, no P1, and P2 count covered by ignore list
+          if (roundNumber >= 2 && !hasP1 && (p2Count === 0 || p2Count <= ignoreCount)) {
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body: `## ✅ AI Review APPROVED\n\n${roundNumber}회차 리뷰 완료. P1 없음, P2 ${p2Count}건 (무시 사유 ${ignoreCount}건). LGTM!`
+            });
+            console.log('APPROVED comment posted');
+          } else {
+            console.log('Not approved yet - issues remain or first round');
+          }
+
+    - name: Remove AI Review label
+      if: success()
+      uses: actions/github-script@v7
+      with:
+        github-token: ${{ inputs.github_token }}
+        script: |
+          try {
+            await github.rest.issues.removeLabel({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              name: '${{ inputs.trigger_label }}'
+            });
+            console.log('Removed "${{ inputs.trigger_label }}" label after successful review');
+          } catch (error) {
+            console.log(`Failed to remove label: ${error.message}`);
+          }
+
+    - name: Cleanup review files
+      if: always()
+      shell: bash
+      run: |
+        rm -f .claude-code-review*.md
+        echo "Cleaned up review files"
