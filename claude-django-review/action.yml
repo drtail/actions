@@ -87,14 +87,16 @@ runs:
               issue_number: context.issue.number,
               body: '## 🔄 AI Review 최대 회차 초과\n\n5회차 리뷰가 완료되었습니다. 더 이상 자동 리뷰를 진행하지 않습니다. 개발자가 직접 검토해 주세요.'
             });
-            console.log('Max rounds exceeded. Exiting.');
-            process.exit(0);
+            console.log('Max rounds exceeded. Setting skip flag.');
+            core.setOutput('should_skip', 'true');
+          } else {
+            console.log(`Round ${roundNumber} - proceeding with review`);
+            core.setOutput('should_skip', 'false');
           }
-
-          console.log(`Round ${roundNumber} - proceeding with review`);
 
     - name: Fetch previous reviews
       id: fetch_previous_reviews
+      if: steps.check_max_rounds.outputs.should_skip != 'true'
       uses: actions/github-script@v7
       with:
         github-token: ${{ inputs.github_token }}
@@ -146,6 +148,7 @@ runs:
           console.log(`Fetched ${recent.length} previous review(s)`);
 
     - name: Minimize old comments
+      if: steps.check_max_rounds.outputs.should_skip != 'true'
       uses: actions/github-script@v7
       with:
         github-token: ${{ inputs.github_token }}
@@ -176,6 +179,7 @@ runs:
 
     - name: Parse ignore list
       id: parse_ignore_list
+      if: steps.check_max_rounds.outputs.should_skip != 'true'
       uses: actions/github-script@v7
       with:
         github-token: ${{ inputs.github_token }}
@@ -199,6 +203,7 @@ runs:
           console.log(`Parsed ${items.length} ignore item(s)`);
 
     - name: Generate Django Code Review
+      if: steps.check_max_rounds.outputs.should_skip != 'true'
       uses: anthropics/claude-code-action@v1
       with:
         anthropic_api_key: ${{ inputs.anthropic_api_key }}
@@ -324,6 +329,7 @@ runs:
         claude_args: '--model ${{ inputs.model }} --allowed-tools "Bash(gh pr diff:*),Bash(gh pr view:*),Bash(gh pr list:*),Write,Read,Glob,Grep"'
 
     - name: Post review with marker
+      if: steps.check_max_rounds.outputs.should_skip != 'true'
       uses: actions/github-script@v7
       with:
         github-token: ${{ inputs.github_token }}
@@ -351,6 +357,7 @@ runs:
           console.log(`Review posted successfully (Round ${roundNumber})`);
 
     - name: Evaluate approve/reject
+      if: steps.check_max_rounds.outputs.should_skip != 'true'
       uses: actions/github-script@v7
       env:
         IGNORE_LIST: ${{ steps.parse_ignore_list.outputs.ignore_list }}
@@ -368,20 +375,19 @@ runs:
           }
 
           const roundNumber = parseInt('${{ steps.count_rounds.outputs.round_number }}');
-          const hasP1 = review.includes('[P1]');
-          const hasP2 = review.includes('[P2]');
+          const hasP1 = /`\[P1\]`/.test(review);
+          const p2Count = (review.match(/`\[P2\]`/g) || []).length;
           const ignoreList = JSON.parse(process.env.IGNORE_LIST || '[]');
-          const hasIgnoreItems = ignoreList.length > 0;
 
-          console.log(`Round: ${roundNumber}, P1: ${hasP1}, P2: ${hasP2}, IgnoreItems: ${ignoreList.length}`);
+          console.log(`Round: ${roundNumber}, P1: ${hasP1}, P2 count: ${p2Count}, IgnoreItems: ${ignoreList.length}`);
 
-          // P1 is never ignorable
-          if (roundNumber >= 2 && !hasP1 && (!hasP2 || hasIgnoreItems)) {
+          // P1 is never ignorable; P2 can be ignored if ignore list covers all P2 items
+          if (roundNumber >= 2 && !hasP1 && (p2Count === 0 || p2Count <= ignoreList.length)) {
             await github.rest.issues.createComment({
               owner: context.repo.owner,
               repo: context.repo.repo,
               issue_number: context.issue.number,
-              body: `## ✅ AI Review APPROVED\n\n${roundNumber}회차 리뷰 완료. P1/P2 이슈 없음 (또는 모두 무시 사유 있음). LGTM!`
+              body: `## ✅ AI Review APPROVED\n\n${roundNumber}회차 리뷰 완료. P1 없음, P2 ${p2Count}건 (무시 사유 ${ignoreList.length}건). LGTM!`
             });
             console.log('APPROVED comment posted');
           } else {
