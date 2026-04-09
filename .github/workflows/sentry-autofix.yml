@@ -10,6 +10,10 @@ on:
         required: false
         type: string
         default: ''
+      slack_mention_user_id:
+        required: false
+        type: string
+        default: ''
       model:
         required: false
         type: string
@@ -88,7 +92,7 @@ jobs:
                 -H "Content-Type: application/json" \
                 -d "{
                   \"channel\": \"$SLACK_CHANNEL_ID\",
-                  \"text\": \"⚠️ [${{ github.repository }}] Sentry Autofix rate limit 초과 (${RECENT_COUNT}회/시간). 인프라 이슈 가능성이 있습니다. 수동 확인이 필요합니다.\n Sentry: ${{ inputs.sentry_url }}\"
+                  \"text\": \"\u26a0\ufe0f [${{ github.repository }}] Sentry Autofix rate limit \ucd08\uacfc (${RECENT_COUNT}\ud68c/\uc2dc\uac04). \uc778\ud504\ub77c \uc774\uc288 \uac00\ub2a5\uc131\uc774 \uc788\uc2b5\ub2c8\ub2e4. \uc218\ub3d9 \ud655\uc778\uc774 \ud544\uc694\ud569\ub2c8\ub2e4.\\n Sentry: ${{ inputs.sentry_url }}\"
                 }"
             fi
           else
@@ -105,6 +109,7 @@ jobs:
           linear_api_key: ${{ secrets.linear_api_key }}
           slack_bot_token: ${{ secrets.slack_bot_token }}
           slack_channel_id: ${{ inputs.slack_channel_id }}
+          slack_mention_user_id: ${{ inputs.slack_mention_user_id }}
           model: ${{ inputs.model }}
           sentry_issue_id: ${{ inputs.sentry_issue_id }}
           sentry_url: ${{ inputs.sentry_url }}
