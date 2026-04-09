@@ -26,6 +26,10 @@ inputs:
     description: 'Slack channel ID for autofix notifications'
     required: false
     default: ''
+  slack_mention_user_id:
+    description: 'Slack user ID to mention in notifications (e.g. U02J2GLUCHY)'
+    required: false
+    default: ''
   model:
     description: 'Claude model to use'
     required: false
@@ -136,8 +140,15 @@ runs:
       env:
         SLACK_BOT_TOKEN: ${{ inputs.slack_bot_token }}
         SLACK_CHANNEL_ID: ${{ inputs.slack_channel_id }}
+        SLACK_MENTION_USER_ID: ${{ inputs.slack_mention_user_id }}
         GH_TOKEN: ${{ github.token }}
       run: |
+        # Build optional mention text
+        MENTION_TEXT=""
+        if [ -n "$SLACK_MENTION_USER_ID" ]; then
+          MENTION_TEXT=" <@${SLACK_MENTION_USER_ID}>"
+        fi
+
         # Check for PR first, then GitHub Issue
         PR_INFO=$(gh pr list --repo ${{ github.repository }} --state open --json number,url,title --jq '.[0] // empty')
         PR_NUMBER=$(echo "$PR_INFO" | jq -r '.number // empty')
@@ -150,7 +161,7 @@ runs:
             -H "Content-Type: application/json" \
             -d "{
               \"channel\": \"$SLACK_CHANNEL_ID\",
-              \"text\": \"🔧 [${{ github.event.repository.name }}] AI Autofix PR이 생성되었습니다.\n<$PR_URL|$PR_TITLE>\",
+              \"text\": \"\ud83d\udd27 [${{ github.event.repository.name }}] AI Autofix PR\uc774 \uc0dd\uc131\ub418\uc5c8\uc2b5\ub2c8\ub2e4.${MENTION_TEXT}\\n<$PR_URL|$PR_TITLE>\",
               \"unfurl_links\": false
             }")
 
@@ -174,7 +185,7 @@ runs:
             -H "Content-Type: application/json" \
             -d "{
               \"channel\": \"$SLACK_CHANNEL_ID\",
-              \"text\": \"📋 [${{ github.event.repository.name }}] AI Autofix가 코드 수정 대신 GitHub Issue를 생성했습니다.\n<$ISSUE_URL|$ISSUE_TITLE>\",
+              \"text\": \"\ud83d\udccb [${{ github.event.repository.name }}] AI Autofix\uac00 \ucf54\ub4dc \uc218\uc815 \ub300\uc2e0 GitHub Issue\ub97c \uc0dd\uc131\ud588\uc2b5\ub2c8\ub2e4.${MENTION_TEXT}\\n<$ISSUE_URL|$ISSUE_TITLE>\",
               \"unfurl_links\": false
             }"
         fi
