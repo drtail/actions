@@ -86,7 +86,16 @@ runs:
              - Title: the Sentry error title
              - Project: choose the most relevant project by listing existing projects. If unsure, use "Backend Bugs"
           6. Read the relevant source files and fix the bug
-          7. Run `ruff format` on all modified files to ensure code style compliance
+          7. Run the project's FULL pre-commit gate exactly as CI runs it — this is
+             the same `pre-commit` check the PR's CI will enforce, so it must pass
+             locally before you commit. Find the command in CLAUDE.md /
+             .pre-commit-config.yaml / the CI workflow (commonly
+             `uv run pre-commit run --all-files`, or `pre-commit run --all-files`).
+             This runs BOTH the linter incl. import sorting (`ruff check`, rule I001)
+             AND the formatter (`ruff format`). Running `ruff format` alone is NOT
+             enough — it does not fix import order/lint issues and the CI `pre-commit`
+             job will fail. Fix every issue reported and re-run until all hooks pass;
+             if a hook auto-modifies files, stage those changes too.
           8. Run tests to verify the fix doesn't break anything
           9. Create a new branch using the Linear issue's branch name
           10. Commit the fix with message: "[DRT-<number>] <description>"
@@ -99,7 +108,8 @@ runs:
           Important:
           - Follow the project conventions in CLAUDE.md
           - Write minimal, focused fixes - don't refactor unrelated code
-          - Run `ruff format` on modified files before committing
+          - The full pre-commit gate (see step 7) MUST pass before you commit and open
+            the PR — never commit while any hook is failing
           - If you cannot determine the fix confidently, create a GitHub Issue explaining why instead of creating a PR
           - Always respond in Korean when commenting on issues or PRs
 
