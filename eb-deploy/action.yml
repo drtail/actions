@@ -1,0 +1,185 @@
+name: 'EB Deploy and Wait'
+description: |
+  Deploy a packaged build to AWS Elastic Beanstalk and self-poll until the
+  target version is live with Health=Green. Retries on transient AWS API
+  errors (Throttling, InternalError, ServiceUnavailable, 5xx) so a flaky
+  describe-environments call doesn't fail the job while the underlying
+  rolling deploy is still progressing.
+
+  Input names mirror `einaregilsson/beanstalk-deploy@v22` to keep consumer
+  diffs minimal — drop-in replacement.
+
+author: 'drtail'
+
+inputs:
+  aws_access_key:
+    description: 'AWS access key id'
+    required: true
+  aws_secret_key:
+    description: 'AWS secret access key'
+    required: true
+  aws_session_token:
+    description: 'AWS session token (for assumed-role / OIDC credentials)'
+    required: false
+    default: ''
+  region:
+    description: 'AWS region (e.g. us-west-2)'
+    required: true
+  application_name:
+    description: 'EB application name'
+    required: true
+  environment_name:
+    description: 'EB environment name'
+    required: true
+  version_label:
+    description: 'EB application version label to create / deploy'
+    required: true
+  deployment_package:
+    description: 'Path to the deployable zip on the runner. Required unless use_existing_version_if_available=true and the version already exists.'
+    required: false
+    default: ''
+  use_existing_version_if_available:
+    description: 'If "true" and the version_label already exists, skip create-application-version and just update-environment.'
+    required: false
+    default: 'false'
+  wait_for_environment_recovery:
+    description: 'Max seconds to wait for the environment to reach Ready+Green on the new version.'
+    required: false
+    default: '600'
+  poll_interval:
+    description: 'Seconds between describe-environments polls.'
+    required: false
+    default: '15'
+  transient_retry_attempts:
+    description: 'Max retry attempts per AWS API call for transient errors (Throttling, InternalError, ServiceUnavailable, 5xx).'
+    required: false
+    default: '6'
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Deploy to EB and wait
+      shell: bash
+      env:
+        AWS_ACCESS_KEY_ID: ${{ inputs.aws_access_key }}
+        AWS_SECRET_ACCESS_KEY: ${{ inputs.aws_secret_key }}
+        AWS_SESSION_TOKEN: ${{ inputs.aws_session_token }}
+        AWS_DEFAULT_REGION: ${{ inputs.region }}
+        APP: ${{ inputs.application_name }}
+        ENVNAME: ${{ inputs.environment_name }}
+        VERSION_LABEL: ${{ inputs.version_label }}
+        PACKAGE: ${{ inputs.deployment_package }}
+        USE_EXISTING: ${{ inputs.use_existing_version_if_available }}
+        WAIT_TIMEOUT: ${{ inputs.wait_for_environment_recovery }}
+        POLL_INTERVAL: ${{ inputs.poll_interval }}
+        MAX_RETRIES: ${{ inputs.transient_retry_attempts }}
+      run: |
+        set -euo pipefail
+
+        # Transient AWS error markers — retry these, fail fast on anything else.
+        TRANSIENT_PATTERN='Throttling|RequestLimitExceeded|InternalError|InternalFailure|ServiceUnavailable|RequestTimeout|RequestTimeoutException|HTTP 5[0-9][0-9]|503 Service|502 Bad Gateway|504 Gateway'
+
+        aws_retry() {
+          local attempt=0
+          local out rc
+          while [ "$attempt" -lt "$MAX_RETRIES" ]; do
+            set +e
+            out=$("$@" 2>&1)
+            rc=$?
+            set -e
+            if [ "$rc" -eq 0 ]; then
+              printf '%s' "$out"
+              return 0
+            fi
+            attempt=$((attempt + 1))
+            if echo "$out" | grep -qE "$TRANSIENT_PATTERN"; then
+              local backoff=$((POLL_INTERVAL * attempt))
+              echo "::warning::Transient AWS error (attempt ${attempt}/${MAX_RETRIES}, sleeping ${backoff}s): ${out}" >&2
+              sleep "$backoff"
+              continue
+            fi
+            echo "$out" >&2
+            return "$rc"
+          done
+          echo "::error::Exhausted ${MAX_RETRIES} retries on transient AWS errors" >&2
+          return 1
+        }
+
+        # ── Step 1: ensure application version exists ───────────────
+        existing=$(aws_retry aws elasticbeanstalk describe-application-versions \
+          --application-name "$APP" \
+          --version-labels "$VERSION_LABEL" \
+          --query 'ApplicationVersions[0].VersionLabel' \
+          --output text 2>/dev/null || true)
+
+        if [ "$existing" = "$VERSION_LABEL" ]; then
+          if [ "$USE_EXISTING" != "true" ]; then
+            echo "::error::Version ${VERSION_LABEL} already exists in ${APP}. Set use_existing_version_if_available=true to reuse." >&2
+            exit 1
+          fi
+          echo "::notice::Reusing existing version ${VERSION_LABEL}"
+        else
+          if [ -z "$PACKAGE" ]; then
+            echo "::error::deployment_package is required when version ${VERSION_LABEL} does not yet exist." >&2
+            exit 1
+          fi
+          if [ ! -f "$PACKAGE" ]; then
+            echo "::error::deployment_package not found at ${PACKAGE}" >&2
+            exit 1
+          fi
+          bucket=$(aws_retry aws elasticbeanstalk create-storage-location \
+            --query 'S3Bucket' --output text)
+          s3_key="${APP}/${VERSION_LABEL}.zip"
+          echo "Uploading ${PACKAGE} -> s3://${bucket}/${s3_key}"
+          aws_retry aws s3 cp "$PACKAGE" "s3://${bucket}/${s3_key}" --only-show-errors
+          aws_retry aws elasticbeanstalk create-application-version \
+            --application-name "$APP" \
+            --version-label "$VERSION_LABEL" \
+            --source-bundle "S3Bucket=${bucket},S3Key=${s3_key}" \
+            --no-auto-create-application >/dev/null
+          echo "::notice::Created application version ${VERSION_LABEL}"
+        fi
+
+        # ── Step 2: trigger update-environment ──────────────────────
+        aws_retry aws elasticbeanstalk update-environment \
+          --application-name "$APP" \
+          --environment-name "$ENVNAME" \
+          --version-label "$VERSION_LABEL" >/dev/null
+        echo "::notice::update-environment dispatched for ${ENVNAME} -> ${VERSION_LABEL}"
+
+        # ── Step 3: self-poll until Ready+Green on the new version ──
+        deadline=$((SECONDS + WAIT_TIMEOUT))
+        last_state=""
+        while [ "$SECONDS" -lt "$deadline" ]; do
+          if env_json=$(aws_retry aws elasticbeanstalk describe-environments \
+              --environment-names "$ENVNAME" \
+              --query 'Environments[0].{Status:Status,Health:Health,VersionLabel:VersionLabel}' \
+              --output json); then
+            status=$(echo "$env_json"  | python3 -c 'import json,sys;print(json.load(sys.stdin)["Status"])')
+            health=$(echo "$env_json"  | python3 -c 'import json,sys;print(json.load(sys.stdin)["Health"])')
+            current=$(echo "$env_json" | python3 -c 'import json,sys;print(json.load(sys.stdin)["VersionLabel"])')
+            new_state="status=${status} health=${health} version=${current}"
+            if [ "$new_state" != "$last_state" ]; then
+              echo "EB ${ENVNAME}: ${new_state}"
+              last_state="$new_state"
+            fi
+            if [ "$status" = "Ready" ]; then
+              if [ "$current" = "$VERSION_LABEL" ] && [ "$health" = "Green" ]; then
+                echo "::notice::Deployment complete on ${ENVNAME} (${VERSION_LABEL}, Green)"
+                exit 0
+              fi
+              if [ "$current" != "$VERSION_LABEL" ]; then
+                echo "::error::EB ${ENVNAME} is Ready but on ${current}, expected ${VERSION_LABEL}. Deploy did not take effect." >&2
+                exit 1
+              fi
+              if [ "$health" != "Green" ]; then
+                echo "::error::EB ${ENVNAME} reached target version ${VERSION_LABEL} but Health=${health}" >&2
+                exit 1
+              fi
+            fi
+          fi
+          sleep "$POLL_INTERVAL"
+        done
+
+        echo "::error::Deploy timeout after ${WAIT_TIMEOUT}s waiting for ${ENVNAME} -> ${VERSION_LABEL}" >&2
+        exit 1
