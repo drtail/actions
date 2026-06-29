@@ -60,6 +60,24 @@ runs:
       with:
         fetch-depth: 0
 
+    # autofix 실행 "전" 시점의 열린 PR/이슈 번호를 스냅샷한다.
+    # Notify 단계에서 이번 run 이 새로 생성한 PR/이슈만 정확히 식별하기 위함.
+    - name: Snapshot open PRs and issues
+      if: inputs.slack_bot_token != '' && inputs.slack_channel_id != ''
+      shell: bash
+      env:
+        GH_TOKEN: ${{ github.token }}
+        REPO: ${{ github.repository }}
+      run: |
+        gh pr list --repo "$REPO" --state open --limit 100 \
+          --json number --jq '[.[].number]' \
+          > "$RUNNER_TEMP/autofix_prs_before.json" \
+          || echo '[]' > "$RUNNER_TEMP/autofix_prs_before.json"
+        gh issue list --repo "$REPO" --state open --limit 100 \
+          --json number --jq '[.[].number]' \
+          > "$RUNNER_TEMP/autofix_issues_before.json" \
+          || echo '[]' > "$RUNNER_TEMP/autofix_issues_before.json"
+
     - name: Run Claude Code Autofix
       uses: anthropics/claude-code-action@v1
       with:
@@ -152,50 +170,95 @@ runs:
         SLACK_CHANNEL_ID: ${{ inputs.slack_channel_id }}
         SLACK_MENTION_USER_ID: ${{ inputs.slack_mention_user_id }}
         GH_TOKEN: ${{ github.token }}
+        REPO: ${{ github.repository }}
+        REPO_NAME: ${{ github.event.repository.name }}
+        RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
       run: |
-        # Build optional mention text
+        # 멘션 텍스트 (옵션)
         MENTION_TEXT=""
         if [ -n "$SLACK_MENTION_USER_ID" ]; then
           MENTION_TEXT=" <@${SLACK_MENTION_USER_ID}>"
         fi
 
-        # Check for PR first, then GitHub Issue
-        PR_INFO=$(gh pr list --repo ${{ github.repository }} --state open --json number,url,title --jq '.[0] // empty')
+        # Slack 전송 헬퍼 — payload 를 jq 로 생성해 UTF-8/이스케이프를 안전하게 처리한다.
+        post_slack() {
+          jq -n --arg channel "$SLACK_CHANNEL_ID" --arg text "$1" \
+            '{channel: $channel, text: $text, unfurl_links: false}' \
+            | curl -s -X POST "https://slack.com/api/chat.postMessage" \
+                -H "Authorization: Bearer $SLACK_BOT_TOKEN" \
+                -H "Content-Type: application/json" \
+                --data @-
+        }
+
+        BEFORE_PRS="$RUNNER_TEMP/autofix_prs_before.json"
+        BEFORE_ISSUES="$RUNNER_TEMP/autofix_issues_before.json"
+        [ -f "$BEFORE_PRS" ] || echo '[]' > "$BEFORE_PRS"
+        [ -f "$BEFORE_ISSUES" ] || echo '[]' > "$BEFORE_ISSUES"
+
+        # 이번 run 이 "새로 생성한" PR 만 식별한다.
+        # (기존 버그: 레포의 최신 열린 PR `.[0]` 을 집어 무관한 draft PR 을 autofix PR 로 오인 발송)
+        # 규칙: 스냅샷 이후 새로 열린 PR → draft 제외 → 🤖 AI Review 라벨 우선 → 최신(createdAt).
+        gh pr list --repo "$REPO" --state open --limit 100 \
+          --json number,url,title,createdAt,isDraft,labels \
+          > "$RUNNER_TEMP/autofix_prs_after.json" \
+          || echo '[]' > "$RUNNER_TEMP/autofix_prs_after.json"
+
+        PR_INFO=$(jq -n \
+          --slurpfile before "$BEFORE_PRS" \
+          --slurpfile after "$RUNNER_TEMP/autofix_prs_after.json" '
+            ($before[0] // []) as $b
+            | ($after[0] // [])
+            | map(select((.number) as $n | ($b | index($n)) | not))
+            | map(select(.isDraft | not))
+            | (map(select(.labels | any(.name == "🤖 AI Review")))) as $labeled
+            | (if ($labeled | length) > 0 then $labeled else . end)
+            | sort_by(.createdAt) | last // empty
+          ')
         PR_NUMBER=$(echo "$PR_INFO" | jq -r '.number // empty')
         PR_URL=$(echo "$PR_INFO" | jq -r '.url // empty')
         PR_TITLE=$(echo "$PR_INFO" | jq -r '.title // empty')
 
         if [ -n "$PR_URL" ]; then
-          RESPONSE=$(curl -s -X POST "https://slack.com/api/chat.postMessage" \
-            -H "Authorization: Bearer $SLACK_BOT_TOKEN" \
-            -H "Content-Type: application/json" \
-            -d "{
-              \"channel\": \"$SLACK_CHANNEL_ID\",
-              \"text\": \"\ud83d\udd27 [${{ github.event.repository.name }}] AI Autofix PR\uc774 \uc0dd\uc131\ub418\uc5c8\uc2b5\ub2c8\ub2e4.${MENTION_TEXT}\\n<$PR_URL|$PR_TITLE>\",
-              \"unfurl_links\": false
-            }")
+          TEXT=$(printf '🔧 [%s] AI Autofix PR이 생성되었습니다.%s\n<%s|%s>' \
+            "$REPO_NAME" "$MENTION_TEXT" "$PR_URL" "$PR_TITLE")
+          RESPONSE=$(post_slack "$TEXT")
 
           SLACK_TS=$(echo "$RESPONSE" | jq -r '.ts // empty')
           SLACK_CHANNEL=$(echo "$RESPONSE" | jq -r '.channel // empty')
 
           if [ -n "$SLACK_TS" ] && [ -n "$PR_NUMBER" ]; then
-            gh pr comment "$PR_NUMBER" --repo ${{ github.repository }} \
+            gh pr comment "$PR_NUMBER" --repo "$REPO" \
               --body "<!-- slack:${SLACK_CHANNEL}:${SLACK_TS} -->"
           fi
           exit 0
         fi
 
-        # Check for recently created GitHub Issue
-        ISSUE_URL=$(gh issue list --repo ${{ github.repository }} --state open --limit 1 --json url,title --jq '.[0].url // empty')
-        ISSUE_TITLE=$(gh issue list --repo ${{ github.repository }} --state open --limit 1 --json url,title --jq '.[0].title // empty')
+        # PR 이 없으면, 이번 run 이 새로 생성한 GitHub Issue 를 동일한 스냅샷 diff 로 식별.
+        gh issue list --repo "$REPO" --state open --limit 100 \
+          --json number,url,title,createdAt \
+          > "$RUNNER_TEMP/autofix_issues_after.json" \
+          || echo '[]' > "$RUNNER_TEMP/autofix_issues_after.json"
+
+        ISSUE_INFO=$(jq -n \
+          --slurpfile before "$BEFORE_ISSUES" \
+          --slurpfile after "$RUNNER_TEMP/autofix_issues_after.json" '
+            ($before[0] // []) as $b
+            | ($after[0] // [])
+            | map(select((.number) as $n | ($b | index($n)) | not))
+            | sort_by(.createdAt) | last // empty
+          ')
+        ISSUE_URL=$(echo "$ISSUE_INFO" | jq -r '.url // empty')
+        ISSUE_TITLE=$(echo "$ISSUE_INFO" | jq -r '.title // empty')
 
         if [ -n "$ISSUE_URL" ]; then
-          curl -s -X POST "https://slack.com/api/chat.postMessage" \
-            -H "Authorization: Bearer $SLACK_BOT_TOKEN" \
-            -H "Content-Type: application/json" \
-            -d "{
-              \"channel\": \"$SLACK_CHANNEL_ID\",
-              \"text\": \"\ud83d\udccb [${{ github.event.repository.name }}] AI Autofix\uac00 \ucf54\ub4dc \uc218\uc815 \ub300\uc2e0 GitHub Issue\ub97c \uc0dd\uc131\ud588\uc2b5\ub2c8\ub2e4.${MENTION_TEXT}\\n<$ISSUE_URL|$ISSUE_TITLE>\",
-              \"unfurl_links\": false
-            }"
+          TEXT=$(printf '📋 [%s] AI Autofix가 코드 수정 대신 GitHub Issue를 생성했습니다.%s\n<%s|%s>' \
+            "$REPO_NAME" "$MENTION_TEXT" "$ISSUE_URL" "$ISSUE_TITLE")
+          post_slack "$TEXT" > /dev/null
+          exit 0
         fi
+
+        # 새로 만든 PR/이슈가 전혀 없음 = autofix 가 결과물을 못 냄(크레딧 소진/판단 보류 등).
+        # 기존엔 이 경우 무관한 최신 PR 을 오인 발송했다. 이제는 결과 없음을 알리고 run 로그를 가리킨다.
+        TEXT=$(printf '⚠️ [%s] AI Autofix가 수정안(PR/Issue)을 생성하지 못했습니다. 런 로그를 확인해주세요.%s\n<%s|실행 로그 보기>' \
+          "$REPO_NAME" "$MENTION_TEXT" "$RUN_URL")
+        post_slack "$TEXT" > /dev/null
