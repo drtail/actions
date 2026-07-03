@@ -9,10 +9,6 @@ inputs:
   github_token:
     description: 'GitHub Token for PR operations'
     required: true
-  model:
-    description: 'Claude model to use for code review'
-    required: false
-    default: 'claude-opus-4-7'
   review_language:
     description: 'Language for review output'
     required: false
@@ -23,6 +19,22 @@ inputs:
     default: '🤖 AI Review'
   allowed_bots:
     description: 'Comma-separated list of bot names allowed to trigger review'
+    required: false
+    default: ''
+  linear_api_key:
+    description: 'Linear API key (org secret) — resolves linked Linear issues for AC context'
+    required: false
+    default: ''
+  slack_bot_token:
+    description: 'Slack bot token (org secret) — resolves linked Slack threads'
+    required: false
+    default: ''
+  notion_api_key:
+    description: 'Notion integration token (org secret) — resolves linked Notion pages'
+    required: false
+    default: ''
+  sentry_api_token:
+    description: 'Sentry API token (org secret) — resolves linked Sentry issues'
     required: false
     default: ''
 
@@ -213,6 +225,18 @@ runs:
           core.setOutput('ignore_count', items.length.toString());
           console.log(`Parsed ${items.length} ignore item(s)`);
 
+    - name: Fetch external context (Linear/Slack/Notion/Sentry)
+      if: steps.check_max_rounds.outputs.should_skip != 'true'
+      shell: bash
+      env:
+        PR_BODY: ${{ github.event.pull_request.body }}
+        LINEAR_API_KEY: ${{ inputs.linear_api_key }}
+        SLACK_BOT_TOKEN: ${{ inputs.slack_bot_token }}
+        NOTION_API_KEY: ${{ inputs.notion_api_key }}
+        SENTRY_API_TOKEN: ${{ inputs.sentry_api_token }}
+      run: |
+        python3 "${GITHUB_ACTION_PATH}/../scripts/fetch_pr_context.py" || echo "context fetch skipped (non-fatal)"
+
     - name: Generate Django Code Review
       if: steps.check_max_rounds.outputs.should_skip != 'true'
       uses: anthropics/claude-code-action@v1
@@ -225,6 +249,7 @@ runs:
           - Current round: ${{ steps.count_rounds.outputs.round_number }}
           - Previous reviews: ${{ steps.fetch_previous_reviews.outputs.previous_reviews }}
           - Ignore list (P2 items author marked as acceptable): ${{ steps.parse_ignore_list.outputs.ignore_list }}
+          - External context: a file `.pr-context.md` in the repo root may hold the linked Linear issue(s) and Slack/Notion/Sentry content resolved from the PR description. If it exists, READ IT FIRST with the Read tool — it is the source of truth for what this PR must deliver. Do NOT invent context for links it reports as failed/unreadable.
 
           SCOPE — Items already covered by automated tools (DO NOT report these):
           - Code style/formatting → covered by Ruff
@@ -237,7 +262,10 @@ runs:
           2. New issues introduced since last review
           3. P1 items in ignore list are invalid — flag them
 
-          If PR description contains acceptance criteria (- [ ] checkboxes), verify each AC item against the code changes.
+          **Acceptance Criteria (REQUIRED CHECK):** The PR description's Acceptance Criteria (- [ ] checkboxes) are this PR's contract. Cross-check them against BOTH the linked Linear issue in `.pr-context.md` and the actual diff:
+          - Every AC must be fully implemented by this PR — verify each against the code (cite file:line). Missing or partial AC → `[P1]`.
+          - The PR must implement its AC exactly — no more, no less. Flag scope creep (substantive changes with no matching AC) as `[P2]`.
+          - If the PR's AC diverge from the linked Linear issue's acceptance criteria, flag the mismatch.
 
           ---
 
@@ -304,7 +332,7 @@ runs:
 
           Save your ${{ inputs.review_language }} review to a file named '.claude-code-review.md' using Write tool. Do NOT post to PR yet.
 
-        claude_args: '--model ${{ inputs.model }} --allowed-tools "Bash(gh pr diff:*),Bash(gh pr view:*),Bash(gh pr list:*),Write,Read,Glob,Grep"'
+        claude_args: '--model claude-sonnet-5 --allowed-tools "Bash(gh pr diff:*),Bash(gh pr view:*),Bash(gh pr list:*),Write,Read,Glob,Grep"'
 
     - name: Post review with marker
       if: steps.check_max_rounds.outputs.should_skip != 'true'
@@ -394,5 +422,5 @@ runs:
       if: always()
       shell: bash
       run: |
-        rm -f .claude-code-review*.md
+        rm -f .claude-code-review*.md .pr-context.md
         echo "Cleaned up review files"

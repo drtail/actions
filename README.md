@@ -93,63 +93,70 @@ This action labels PRs based on the PR title and duplicate patterns.
       D-*
 ```
 
-## 4. claude-django-review
-### Description
+## 4. AI PR Review (small & big)
 
-This reusable workflow performs automated code reviews on Django backend pull requests using Claude AI. It analyzes database query efficiency, architecture patterns, security issues, and test quality.
+Two composite actions review PRs with Claude for the Linear-issue-based workflow. Both
+**hardcode the model (`claude-sonnet-5`)** — consuming repos cannot override it — and both
+resolve external links (Linear / Slack / Notion / Sentry) found in the PR body via
+`scripts/fetch_pr_context.py`, writing `.pr-context.md` for the reviewer to read.
 
-### Features
+Tokens come from **organization secrets** (`LINEAR_API_KEY`, `SLACK_BOT_TOKEN`,
+`NOTION_API_KEY`, `SENTRY_API_TOKEN`) scoped to the consuming repos and
+passed through as inputs; a missing/unscoped token simply skips that source (never fails the
+review). A link that can't be read (Slack bot not in channel, Notion page not shared, …) is
+reported under "수집 실패" in `.pr-context.md` so the reviewer never guesses.
 
-- **Database Query Analysis**: Detects N+1 queries, missing select_related/prefetch_related
-- **Architecture Validation**: Ensures proper separation of Views, Serializers, Usecases, and Tasks
-- **Security Review**: Checks for SQL injection, XSS, authentication gaps
-- **Test Quality**: Validates test patterns and coverage
-- **Two-stage Review**: Initial review + verification step for completeness
+### 4a. claude-django-review-loop — small PR (`3 -> 2`, base ≠ trunk)
 
-### Inputs and Outputs
-
-#### Inputs
-
-| Name | Description | Required | Default |
-|------|-------------|----------|---------|
-| model | Claude model to use for code review | false | claude-opus-4-5 |
-| review_language | Language for review output | false | Korean |
-
-#### Secrets
-
-| Name | Description | Required |
-|------|-------------|----------|
-| ANTHROPIC_API_KEY | Anthropic API key for Claude access | true |
-
-**Note:** `GITHUB_TOKEN` is automatically provided by GitHub Actions and does not need to be passed explicitly.
-
-#### Outputs
-
-This workflow posts a comprehensive code review as a PR comment.
-
-### Usage
+Review-reflect-re-review loop (min 2, max 5 rounds). Verifies the PR's Acceptance Criteria are
+implemented **exactly — no more, no less** against the diff and the linked Linear issue, plus
+N+1 / architecture / security / tests. Posts `## ✅ AI Review APPROVED` once clean (round ≥ 2),
+which is what lets the author merge.
 
 ```yaml
-name: Claude Django Code Review
-
 on:
   pull_request:
-    types: [opened, synchronize, ready_for_review]
-
+    types: [labeled]
 jobs:
-  claude-review:
-    uses: drtail/actions/.github/workflows/claude-django-review.yml@v1
-    with:
-      model: 'claude-opus-4-5'  # optional
-      review_language: 'Korean' # optional
-    secrets:
-      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+  review:
+    if: github.event.label.name == '🤖 AI Review (작은 PR)' && github.event.pull_request.base.ref != 'main'
+    runs-on: ubuntu-latest
+    permissions: { contents: read, pull-requests: write, issues: write, id-token: write }
+    steps:
+      - uses: drtail/actions/claude-django-review-loop@main
+        with:
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          trigger_label: '🤖 AI Review (작은 PR)'
+          linear_api_key: ${{ secrets.LINEAR_API_KEY }}
+          slack_bot_token: ${{ secrets.SLACK_BOT_TOKEN }}
+          notion_api_key: ${{ secrets.NOTION_API_KEY }}
+          sentry_api_token: ${{ secrets.SENTRY_API_TOKEN }}
+          allowed_bots: 'claude'
+```
+
+### 4b. claude-parent-review — big PR (`2 -> 1`, base = trunk)
+
+Completeness audit of a platform integration PR against its **Linear parent issue**: checks
+that the PR delivers exactly the backend-relevant scope (기술 목표 / 작업 내용 / 영향 범위 /
+범위 제외 / 완료 기준 / 기술 노트) — no more, no less — plus the standard code review.
+Intentionally **does not** emit an APPROVED marker (the human reviewer merges).
+
+```yaml
+      - uses: drtail/actions/claude-parent-review@main
+        with:
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          trigger_label: '🛰️ AI Review (큰 PR)'
+          linear_api_key: ${{ secrets.LINEAR_API_KEY }}
+          slack_bot_token: ${{ secrets.SLACK_BOT_TOKEN }}
+          notion_api_key: ${{ secrets.NOTION_API_KEY }}
+          sentry_api_token: ${{ secrets.SENTRY_API_TOKEN }}
+          allowed_bots: 'claude'
 ```
 
 ### Requirements
 
-Your repository should have a `CLAUDE.md` file that documents:
-- Project architecture and conventions
-- Django app structure
-- Testing standards
-- API endpoint patterns
+Each consuming repo should have a `CLAUDE.md` documenting architecture, conventions, and test
+standards. The older single-shot `claude-django-review` action is kept for backward
+compatibility but is superseded by `claude-django-review-loop`.

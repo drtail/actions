@@ -1,0 +1,207 @@
+name: 'Claude Parent PR Review (Big PR)'
+description: 'Completeness review of a platform integration PR against its Linear parent issue (base = trunk).'
+author: 'drtail'
+
+# Big PR = a platform (backend) integration PR merging into the trunk branch, i.e. the
+# "2 -> 1" PR that rolls a platform's work up to the parent. Unlike the small-PR review
+# this audits COMPLETENESS: does this single PR deliver exactly the backend-relevant
+# scope of the Linear parent issue — no more, no less. It intentionally does NOT emit the
+# "AI Review APPROVED" marker, so it never triggers reviewer auto-assignment; the human
+# (즈먼) still reviews and merges.
+
+inputs:
+  anthropic_api_key:
+    description: 'Anthropic API Key'
+    required: true
+  github_token:
+    description: 'GitHub Token for PR operations'
+    required: true
+  review_language:
+    description: 'Language for review output'
+    required: false
+    default: 'Korean'
+  trigger_label:
+    description: 'Label name that triggers the review'
+    required: false
+    default: '🛰️ AI Review (큰 PR)'
+  allowed_bots:
+    description: 'Comma-separated list of bot names allowed to trigger review'
+    required: false
+    default: ''
+  linear_api_key:
+    description: 'Linear API key (org secret) — resolves the Linear parent issue (completeness benchmark)'
+    required: false
+    default: ''
+  slack_bot_token:
+    description: 'Slack bot token (org secret) — resolves linked Slack threads'
+    required: false
+    default: ''
+  notion_api_key:
+    description: 'Notion integration token (org secret) — resolves linked Notion pages'
+    required: false
+    default: ''
+  sentry_api_token:
+    description: 'Sentry API token (org secret) — resolves linked Sentry issues'
+    required: false
+    default: ''
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+
+    - name: Minimize previous parent-review comments
+      uses: actions/github-script@v7
+      with:
+        github-token: ${{ inputs.github_token }}
+        script: |
+          const comments = await github.rest.issues.listComments({
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            issue_number: context.issue.number,
+            per_page: 100
+          });
+          for (const comment of comments.data) {
+            if (comment.body && comment.body.includes('<!-- parent-pr-review -->')) {
+              try {
+                await github.graphql(`
+                  mutation($id: ID!) {
+                    minimizeComment(input: {subjectId: $id, classifier: OUTDATED}) {
+                      clientMutationId
+                    }
+                  }
+                `, { id: comment.node_id });
+              } catch (error) {
+                console.log(`Failed to minimize comment ${comment.id}: ${error.message}`);
+              }
+            }
+          }
+
+    - name: Fetch external context (Linear parent/Slack/Notion/Sentry)
+      shell: bash
+      env:
+        PR_BODY: ${{ github.event.pull_request.body }}
+        LINEAR_API_KEY: ${{ inputs.linear_api_key }}
+        SLACK_BOT_TOKEN: ${{ inputs.slack_bot_token }}
+        NOTION_API_KEY: ${{ inputs.notion_api_key }}
+        SENTRY_API_TOKEN: ${{ inputs.sentry_api_token }}
+      run: |
+        python3 "${GITHUB_ACTION_PATH}/../scripts/fetch_pr_context.py" || echo "context fetch skipped (non-fatal)"
+
+    - name: Generate Parent PR Completeness Review
+      uses: anthropics/claude-code-action@v1
+      with:
+        anthropic_api_key: ${{ inputs.anthropic_api_key }}
+        allowed_bots: ${{ inputs.allowed_bots }}
+        show_full_output: true
+        prompt: |
+          REPO: ${{ github.repository }}
+          PR NUMBER: ${{ github.event.pull_request.number }}
+
+          You are a senior Django backend engineer performing a COMPLETENESS review of a
+          "big" integration PR — a platform's work merging up to the trunk branch. Your
+          job is to verify this single PR delivers EXACTLY the backend-relevant scope of
+          its Linear parent issue: no more, no less. A human reviewer (즈먼) merges after
+          you; be sharp and conservative — surface gaps, don't rubber-stamp.
+
+          **STEP 1 — Read the source of truth.**
+          - Read `.pr-context.md` in the repo root with the Read tool. It holds the linked
+            Linear parent issue (marked "Parent 이슈 (완결성 기준)") and any Slack/Notion/
+            Sentry content resolved from the PR description. This parent issue is the
+            completeness benchmark. Do NOT invent content for links it lists as failed.
+          - Read the project's CLAUDE.md (if present) for conventions/architecture, and
+            apply them. Do not mention "CLAUDE.md" in your output.
+
+          **STEP 2 — Completeness against the parent issue (PRIMARY).**
+          Judge ONLY the backend-relevant requirements. Requirements that clearly belong to
+          the app/web (frontend) are delivered in separate PRs — list them under "이 PR 범위 밖
+          (다른 플랫폼 PR)" and do NOT flag them as missing here. Go section by section:
+          - 기술 목표 (Tech Goal): is it achieved by this PR?
+          - 작업 내용 (Description / Technical Scope): is every backend item implemented?
+            Flag 덜(missing)/더(extra)/다르게(divergent) implemented parts with file:line.
+          - 영향 범위 (Affected Areas): did the PR touch the predicted existing areas, and
+            only those? NOTE: brand-new files/registrations are NOT "affected areas" — do not
+            treat added-but-unlisted new code as a gap. Only existing behavior/data/interface
+            changes count.
+          - 범위 제외 (Out of Scope): confirm the PR did NOT implement excluded items.
+          - 완료 기준 (Acceptance Criteria): verify EACH backend AC is fully met, citing
+            file:line evidence. Any unmet/uncertain AC → `[P1]`.
+          - 기술 노트 (Technical Notes): is the stated approach followed? Check migrations/
+            rollback, dependencies, and any monitoring/alerting the Risks/DoD require.
+          - Verdict on completeness: the PR must equal the parent's backend scope. Missing
+            backend scope → `[P1]`; scope creep beyond the parent → `[P2]`.
+
+          **STEP 3 — Standard code review** (secondary, still required):
+          1. Database query efficiency (N+1, select_related/prefetch_related, redundant queries).
+          2. Architecture: business logic in the correct layer per project conventions.
+          3. Security: authn/authz gaps, injection/XSS, sensitive data exposure.
+          4. Test quality: exception assertions, model enums over hardcoded strings, key status codes.
+          Skip items already covered by tooling (Ruff formatting, mypy types, import-linter
+          import direction).
+
+          **Priority levels:** P1 critical (must fix) · P2 should fix · P3 could fix · P4/P5 minor.
+
+          **Output Requirements:**
+          - Write the entire review in ${{ inputs.review_language }}.
+          - Start with: `## 🛰️ 큰 PR 완결성 리뷰` and a verdict line `완결성: 충족` or `완결성: 미흡`.
+          - Then a "## Parent 이슈 대조" section going through 기술 목표 / 작업 내용 / 영향 범위 /
+            범위 제외 / 완료 기준 / 기술 노트, each with an evidence-backed pass/gap note.
+          - Then "## 이 PR 범위 밖 (다른 플랫폼 PR)" listing frontend/other-platform requirements.
+          - Then "## 코드 리뷰" with `[Pn]` items (backtick-wrapped badge) + file:line + explanation.
+          - End with a conclusion restating the verdict and the concrete gaps to close.
+          - Do NOT output the exact phrase "AI Review APPROVED" (this review does not gate merge).
+          - Cite file:line for every claim; do not speculate.
+
+          IMPORTANT: Never write files to /tmp/ or outside the repository root.
+          Save your ${{ inputs.review_language }} review to '.claude-parent-review.md' using the Write tool. Do NOT post to the PR yourself.
+
+        claude_args: '--model claude-sonnet-5 --allowed-tools "Bash(gh pr diff:*),Bash(gh pr view:*),Bash(gh pr list:*),Write,Read,Glob,Grep"'
+
+    - name: Post review to PR
+      uses: actions/github-script@v7
+      with:
+        github-token: ${{ inputs.github_token }}
+        script: |
+          const fs = require('fs');
+          let review;
+          try {
+            review = fs.readFileSync('.claude-parent-review.md', 'utf8');
+          } catch (error) {
+            console.error('Failed to read .claude-parent-review.md:', error);
+            core.setFailed('Review file not found. Claude review may have failed.');
+            return;
+          }
+          await github.rest.issues.createComment({
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            issue_number: context.issue.number,
+            body: `${review}\n\n<!-- parent-pr-review -->`
+          });
+          console.log('Parent PR review posted successfully');
+
+    - name: Remove trigger label
+      if: success()
+      uses: actions/github-script@v7
+      with:
+        github-token: ${{ inputs.github_token }}
+        script: |
+          try {
+            await github.rest.issues.removeLabel({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              name: '${{ inputs.trigger_label }}'
+            });
+          } catch (error) {
+            console.log(`Failed to remove label: ${error.message}`);
+          }
+
+    - name: Cleanup
+      if: always()
+      shell: bash
+      run: |
+        rm -f .claude-parent-review*.md .pr-context.md
+        echo "Cleaned up review artifacts"
