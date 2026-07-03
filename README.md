@@ -101,7 +101,7 @@ resolve external links (Linear / Slack / Notion / Sentry) found in the PR body v
 `scripts/fetch_pr_context.py`, writing `.pr-context.md` for the reviewer to read.
 
 Tokens come from **organization secrets** (`LINEAR_API_KEY`, `SLACK_BOT_TOKEN`,
-`NOTION_API_KEY`, `SENTRY_API_TOKEN`, `NEW_RELIC_API_KEY`) scoped to the consuming repos and
+`NOTION_API_KEY`, `SENTRY_API_TOKEN`) scoped to the consuming repos and
 passed through as inputs; a missing/unscoped token simply skips that source (never fails the
 review). A link that can't be read (Slack bot not in channel, Notion page not shared, …) is
 reported under "수집 실패" in `.pr-context.md` so the reviewer never guesses.
@@ -140,8 +140,7 @@ jobs:
 Completeness audit of a platform integration PR against its **Linear parent issue**: checks
 that the PR delivers exactly the backend-relevant scope (기술 목표 / 작업 내용 / 영향 범위 /
 범위 제외 / 완료 기준 / 기술 노트) — no more, no less — plus the standard code review.
-Intentionally **does not** emit an APPROVED marker (the human reviewer merges). May run
-read-only NRQL via `scripts/newrelic_nrql.py` to sanity-check monitoring referenced in Risks/DoD.
+Intentionally **does not** emit an APPROVED marker (the human reviewer merges).
 
 ```yaml
       - uses: drtail/actions/claude-parent-review@main
@@ -153,7 +152,6 @@ read-only NRQL via `scripts/newrelic_nrql.py` to sanity-check monitoring referen
           slack_bot_token: ${{ secrets.SLACK_BOT_TOKEN }}
           notion_api_key: ${{ secrets.NOTION_API_KEY }}
           sentry_api_token: ${{ secrets.SENTRY_API_TOKEN }}
-          new_relic_api_key: ${{ secrets.NEW_RELIC_API_KEY }}
           allowed_bots: 'claude'
 ```
 

@@ -268,7 +268,7 @@ def main() -> None:
             except Exception as e:
                 notes.append(f"Linear {ident} — {type(e).__name__}: {e}")
         for m in re.finditer(r"https?://linear\.app/[^/\s]+/document/([^\s)]+)", body):
-            slug_id = m.group(1).rsplit("-", 1)[-1]
+            slug_id = m.group(1).split("?")[0].split("#")[0].rsplit("-", 1)[-1]
             try:
                 doc = linear_document(slug_id, linear_token)
                 if doc:

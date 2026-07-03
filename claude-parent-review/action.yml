@@ -44,10 +44,6 @@ inputs:
     description: 'Sentry API token (org secret) — resolves linked Sentry issues'
     required: false
     default: ''
-  new_relic_api_key:
-    description: 'New Relic user API key (org secret) — optional NRQL checks for monitoring/alerts'
-    required: false
-    default: ''
 
 runs:
   using: 'composite'
@@ -95,15 +91,8 @@ runs:
       run: |
         python3 "${GITHUB_ACTION_PATH}/../scripts/fetch_pr_context.py" || echo "context fetch skipped (non-fatal)"
 
-    - name: Prepare New Relic helper
-      shell: bash
-      run: |
-        cp "${GITHUB_ACTION_PATH}/../scripts/newrelic_nrql.py" ./nrql.py || echo "nrql helper unavailable"
-
     - name: Generate Parent PR Completeness Review
       uses: anthropics/claude-code-action@v1
-      env:
-        NEW_RELIC_API_KEY: ${{ inputs.new_relic_api_key }}
       with:
         anthropic_api_key: ${{ inputs.anthropic_api_key }}
         allowed_bots: ${{ inputs.allowed_bots }}
@@ -144,8 +133,6 @@ runs:
             rollback, dependencies, and any monitoring/alerting the Risks/DoD require.
           - Verdict on completeness: the PR must equal the parent's backend scope. Missing
             backend scope → `[P1]`; scope creep beyond the parent → `[P2]`.
-          - Optional: if the parent's Risks/DoD reference monitoring/alerts, you MAY run
-            `python3 nrql.py "<NRQL>"` to sanity-check New Relic data.
 
           **STEP 3 — Standard code review** (secondary, still required):
           1. Database query efficiency (N+1, select_related/prefetch_related, redundant queries).
@@ -171,7 +158,7 @@ runs:
           IMPORTANT: Never write files to /tmp/ or outside the repository root.
           Save your ${{ inputs.review_language }} review to '.claude-parent-review.md' using the Write tool. Do NOT post to the PR yourself.
 
-        claude_args: '--model claude-sonnet-5 --allowed-tools "Bash(gh pr diff:*),Bash(gh pr view:*),Bash(gh pr list:*),Bash(python3 nrql.py:*),Write,Read,Glob,Grep"'
+        claude_args: '--model claude-sonnet-5 --allowed-tools "Bash(gh pr diff:*),Bash(gh pr view:*),Bash(gh pr list:*),Write,Read,Glob,Grep"'
 
     - name: Post review to PR
       uses: actions/github-script@v7
@@ -216,5 +203,5 @@ runs:
       if: always()
       shell: bash
       run: |
-        rm -f .claude-parent-review*.md .pr-context.md nrql.py
+        rm -f .claude-parent-review*.md .pr-context.md
         echo "Cleaned up review artifacts"
