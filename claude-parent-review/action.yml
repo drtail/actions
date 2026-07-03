@@ -3,7 +3,7 @@ description: 'Completeness review of a platform integration PR against its Linea
 author: 'drtail'
 
 # Big PR = a platform (backend) integration PR merging into the trunk branch, i.e. the
-# "2 -> 1" PR that rolls a platform's work up to the parent. Unlike the small-PR review
+# integration PR that rolls a platform's work up to the parent. Unlike the small-PR review
 # this audits COMPLETENESS: does this single PR deliver exactly the backend-relevant
 # scope of the Linear parent issue — no more, no less. It intentionally does NOT emit the
 # "AI Review APPROVED" marker, so it never triggers reviewer auto-assignment; the human

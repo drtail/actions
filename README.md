@@ -106,7 +106,7 @@ passed through as inputs; a missing/unscoped token simply skips that source (nev
 review). A link that can't be read (Slack bot not in channel, Notion page not shared, …) is
 reported under "수집 실패" in `.pr-context.md` so the reviewer never guesses.
 
-### 4a. claude-django-review-loop — small PR (`3 -> 2`, base ≠ trunk)
+### 4a. claude-django-review-loop — small PR (base ≠ trunk)
 
 Review-reflect-re-review loop (min 2, max 5 rounds). Verifies the PR's Acceptance Criteria are
 implemented **exactly — no more, no less** against the diff and the linked Linear issue, plus
@@ -135,7 +135,7 @@ jobs:
           allowed_bots: 'claude'
 ```
 
-### 4b. claude-parent-review — big PR (`2 -> 1`, base = trunk)
+### 4b. claude-parent-review — big PR (base = trunk)
 
 Completeness audit of a platform integration PR against its **Linear parent issue**: checks
 that the PR delivers exactly the backend-relevant scope (기술 목표 / 작업 내용 / 영향 범위 /
