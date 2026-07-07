@@ -158,7 +158,18 @@ runs:
           IMPORTANT: Never write files to /tmp/ or outside the repository root.
           Save your ${{ inputs.review_language }} review to '.claude-parent-review.md' using the Write tool. Do NOT post to the PR yourself.
 
-        claude_args: '--model claude-sonnet-5 --allowed-tools "Bash(gh pr diff:*),Bash(gh pr view:*),Bash(gh pr list:*),Write,Read,Glob,Grep"'
+          NOTE: The repository is checked out with FULL history (fetch-depth 0) — all
+          branches are already available as origin/* refs. For a big integration diff,
+          prefer local read-only git over `gh pr diff`: e.g.
+          `git diff origin/<base>...origin/<head>` (aggregate), `git log`, and
+          `git show <sha>` (per-commit). No `git fetch` is needed. Avoid piping through
+          other commands (tail/head/etc.) — pipes may be blocked by the tool allowlist;
+          plain output is truncated safely by the harness.
+
+        # Bash 허용 목록: gh pr 조회 + read-only git 조사 명령.
+        # 큰 PR(수천 라인 diff)은 에이전트가 커밋 단위 분석(git show/diff)을 필요로 하는데,
+        # git 이 전부 차단되면 리뷰 파일을 못 쓰고 종료한다(mochii-server#564 R1 실패 사례).
+        claude_args: '--model claude-sonnet-5 --allowed-tools "Bash(gh pr diff:*),Bash(gh pr view:*),Bash(gh pr list:*),Bash(git diff:*),Bash(git log:*),Bash(git show:*),Bash(git branch:*),Write,Read,Glob,Grep"'
 
     - name: Post review to PR
       uses: actions/github-script@v7
