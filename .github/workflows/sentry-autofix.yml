@@ -4,8 +4,17 @@ on:
   workflow_call:
     inputs:
       new_relic_account_id:
-        required: true
+        required: false
         type: string
+        default: ''
+      sentry_org:
+        required: false
+        type: string
+        default: 'drtail-xv'
+      require_symbolication:
+        required: false
+        type: boolean
+        default: false
       slack_channel_id:
         required: false
         type: string
@@ -41,7 +50,7 @@ on:
       sentry_api_token:
         required: true
       new_relic_api_key:
-        required: true
+        required: false
       linear_api_key:
         required: true
       slack_bot_token:
@@ -104,6 +113,8 @@ jobs:
         with:
           anthropic_api_key: ${{ secrets.anthropic_api_key }}
           sentry_api_token: ${{ secrets.sentry_api_token }}
+          sentry_org: ${{ inputs.sentry_org }}
+          require_symbolication: ${{ inputs.require_symbolication }}
           new_relic_api_key: ${{ secrets.new_relic_api_key }}
           new_relic_account_id: ${{ inputs.new_relic_account_id }}
           linear_api_key: ${{ secrets.linear_api_key }}
