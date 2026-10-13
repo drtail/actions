@@ -6,5 +6,6 @@ SPLIT REVIEW MODE — this PR changes __LINES__ lines (lock files excluded). A s
    - DB 쿼리 효율: N+1, select_related / prefetch_related coverage, redundant queries, missing bulk operations — trace ViewSet → Serializer → nested serializers.
    - 아키텍처·보안: layer boundaries per CLAUDE.md, authentication / permission gaps, injection, sensitive data exposure.
    - 정확성·테스트: logic bugs, edge cases, error paths, async/transaction ordering, missing tests for key status codes.
+   Wait for all four results in this same turn — do not end your turn, and do not write the review file, until every reviewer has returned.
 3. Verify every returned finding yourself by opening the cited code. Drop what you cannot confirm, merge duplicates, keep the highest valid priority.
 4. Write ONE review in the normal output format below — same headers, badges and open-issues marker. Right under the decision header add the line: `분할 리뷰: 계약 · DB 쿼리 · 아키텍처·보안 · 정확성·테스트 (N줄)`.

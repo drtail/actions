@@ -40,7 +40,7 @@ REVIEW_KINDS = [
     ("big", re.compile(r"<!-- parent-pr-review -->")),
 ]
 KIND_LABEL = {"small": "작은 PR", "app": "앱", "big": "큰 PR"}
-FOOTER = re.compile(r"🧠 (\S+) · effort (\S+)")
+FOOTER = re.compile(r"🧠 (claude-[\w.-]+) · effort (\w+)")
 # 리뷰가 본 head 커밋. 봇이 코멘트에 남긴다 (DRT-7000 이후). 없으면 커밋 날짜로 추정한다.
 REVIEWED_SHA = re.compile(r"<!--\s*reviewed-sha:\s*([0-9a-f]{7,40})\s*-->")
 SEVERITIES = {"P1", "P2"}
@@ -231,8 +231,9 @@ def main() -> int:
                 no_review += 1
                 continue
             for kind, comment in reviews:
-                m = FOOTER.search(comment["body"])
-                label = f"{m.group(1)} · {m.group(2)}" if m else LEGACY
+                # 마지막 표기만 본다 — 리뷰 본문이 표기 형식을 예시로 인용할 수 있다.
+                feet = FOOTER.findall(comment["body"])
+                label = f"{feet[-1][0]} · {feet[-1][1]}" if feet else LEGACY
                 base = reviewed_sha(repo, pr["number"], comment["body"], parse_time(comment["created_at"]))
                 if base is None:
                     unknown_base.append(f"#{pr['number']} {KIND_LABEL[kind]}")

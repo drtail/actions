@@ -259,6 +259,12 @@ runs:
     - name: Generate Django Code Review
       if: steps.check_max_rounds.outputs.should_skip != 'true'
       uses: anthropics/claude-code-action@v1
+      env:
+        # 분할 리뷰의 하위 리뷰어(Agent)를 앞단에서 돌려 결과가 같은 턴에 돌아오게 한다.
+        # 헤드리스 실행은 메인 턴이 끝나면 종료돼, 백그라운드 하위 리뷰어를 기다리지 않으면
+        # 리뷰 파일 없이 끝난다 (DRT-6999 실측: 'agents report back' 후 종료 → ENOENT).
+        CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: '1'
+        CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS: '900000'
       with:
         anthropic_api_key: ${{ inputs.anthropic_api_key }}
         allowed_bots: ${{ inputs.allowed_bots }}
