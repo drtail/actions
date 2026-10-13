@@ -10,13 +10,14 @@ const LOCK_FILES = new Set([
   'go.sum', 'Cargo.lock', 'composer.lock',
 ]);
 
+const HAIKU = 'claude-haiku-5-5';
 const SONNET = 'claude-sonnet-5-5';
 const OPUS = 'claude-opus-5-5';
 
 // [상한 라인 수(이하), 모델, effort] — 위에서부터 첫 매치. 마지막 행은 상한 없음.
 const TIERS = {
   small: [
-    [200, SONNET, 'medium'],
+    [200, HAIKU, 'medium'],
     [500, SONNET, 'high'],
     [Infinity, OPUS, 'high'],
   ],

@@ -112,7 +112,7 @@ reported under "수집 실패" in `.pr-context.md` so the reviewer never guesses
 
 | Action | Lines | Model | Effort |
 |---|---|---|---|
-| small PR (`claude-django-review-loop`) | ≤ 200 | `claude-sonnet-5-5` | `medium` |
+| small PR (`claude-django-review-loop`) | ≤ 200 | `claude-haiku-5-5` | `medium` |
 | | 201 – 500 | `claude-sonnet-5-5` | `high` |
 | | > 500 | `claude-opus-5-5` | `high` |
 | big PR (`claude-parent-review`) | ≤ 2000 | `claude-opus-5-5` | `high` |
