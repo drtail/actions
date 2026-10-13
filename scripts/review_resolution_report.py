@@ -41,6 +41,10 @@ REVIEW_KINDS = [
 ]
 KIND_LABEL = {"small": "작은 PR", "app": "앱", "big": "큰 PR"}
 FOOTER = re.compile(r"🧠 (\S+) · effort (\S+)")
+# 리뷰가 본 head 커밋. 봇이 코멘트에 남긴다 (DRT-7000 이후). 없으면 커밋 날짜로 추정한다.
+REVIEWED_SHA = re.compile(r"<!--\s*reviewed-sha:\s*([0-9a-f]{7,40})\s*-->")
+SEVERITIES = {"P1", "P2"}
+STATUSES = {"resolved", "not_resolved", "waived", "unclear"}
 LEGACY = "이전 모델 (DRT-6998 전)"
 
 SCHEMA = {
@@ -138,8 +142,24 @@ def first_reviews(repo: str, number: int) -> list:
     return list(found.items())
 
 
-def sha_at(commits: list, when: datetime) -> str:
-    """리뷰 시점에 PR head 였던 커밋 (그 시각 이전 마지막 커밋)."""
+def force_push_times(repo: str, number: int) -> list:
+    return [
+        parse_time(e["created_at"])
+        for e in gh_paged(f"/repos/{repo}/issues/{number}/timeline", limit_pages=5)
+        if e.get("event") == "head_ref_force_pushed" and e.get("created_at")
+    ]
+
+
+def reviewed_sha(repo: str, number: int, body: str, when: datetime) -> str | None:
+    """리뷰가 본 head 커밋. 코멘트 표식이 우선이고, 없으면 그 시각 이전 마지막 커밋으로 추정한다.
+    표식 없이 리뷰 뒤 force-push 가 있었으면 None — fixup/rebase 로 커밋 날짜가 다시 써져
+    추정이 리뷰 전 코드까지 '리뷰 후 변경' 으로 섞어 해결률을 부풀리기 때문."""
+    m = REVIEWED_SHA.search(body)
+    if m:
+        return m.group(1)
+    if any(t > when for t in force_push_times(repo, number)):
+        return None
+    commits = list(gh_paged(f"/repos/{repo}/pulls/{number}/commits", limit_pages=3))
     before = [c for c in commits if parse_time(c["commit"]["committer"]["date"]) <= when]
     return (before[-1] if before else commits[0])["sha"]
 
@@ -149,8 +169,8 @@ def post_review_diff(repo: str, base: str, head: str) -> str:
         return ""
     try:
         diff = gh(f"/repos/{repo}/compare/{base}...{head}", accept="application/vnd.github.diff")
-    except urllib.error.HTTPError as e:  # force-push 로 리뷰 시점 커밋이 사라진 경우 등
-        return f"(리뷰 이후 diff 를 가져오지 못함: HTTP {e.code})"
+    except (urllib.error.URLError, TimeoutError) as e:  # 사라진 커밋·타임아웃 등
+        return f"(리뷰 이후 diff 를 가져오지 못함: {type(e).__name__})"
     return diff if len(diff) <= MAX_DIFF_CHARS else diff[:MAX_DIFF_CHARS] + "\n…(생략됨)"
 
 
@@ -203,18 +223,23 @@ def main() -> int:
     prs = merged_prs(repo, since)
 
     rows = defaultdict(lambda: {"prs": 0, "P1": 0, "P2": 0, "resolved": 0, "not_resolved": 0, "waived": 0, "unclear": 0})
-    jobs, no_review = [], 0
+    jobs, no_review, unknown_base, failed = [], 0, [], []
     for pr in prs:
-        reviews = first_reviews(repo, pr["number"])
-        if not reviews:
-            no_review += 1
-            continue
-        commits = list(gh_paged(f"/repos/{repo}/pulls/{pr['number']}/commits", limit_pages=3))
-        for kind, comment in reviews:
-            m = FOOTER.search(comment["body"])
-            label = f"{m.group(1)} · {m.group(2)}" if m else LEGACY
-            base = sha_at(commits, parse_time(comment["created_at"]))
-            jobs.append((pr, kind, label, comment["body"], post_review_diff(repo, base, pr["head"]["sha"])))
+        try:  # PR 한 건의 수집 실패가 리포트 전체를 막지 않게
+            reviews = first_reviews(repo, pr["number"])
+            if not reviews:
+                no_review += 1
+                continue
+            for kind, comment in reviews:
+                m = FOOTER.search(comment["body"])
+                label = f"{m.group(1)} · {m.group(2)}" if m else LEGACY
+                base = reviewed_sha(repo, pr["number"], comment["body"], parse_time(comment["created_at"]))
+                if base is None:
+                    unknown_base.append(f"#{pr['number']} {KIND_LABEL[kind]}")
+                    continue
+                jobs.append((pr, kind, label, comment["body"], post_review_diff(repo, base, pr["head"]["sha"])))
+        except Exception as e:
+            failed.append(f"#{pr['number']} 수집: {type(e).__name__}")
 
     def run(job):
         pr, kind, label, review, diff = job
@@ -223,12 +248,14 @@ def main() -> int:
         except Exception as e:  # 한 건 실패가 리포트 전체를 막지 않게
             return job, None, f"#{pr['number']} {KIND_LABEL[kind]}: {type(e).__name__}"
 
-    details, failed = [], []
+    details = []
     with ThreadPoolExecutor(max_workers=int(env("JUDGE_CONCURRENCY", "4"))) as pool:
         for (pr, kind, label, _, _), findings, err in pool.map(run, jobs):
             if err:
                 failed.append(err)
                 continue
+            # API 는 스키마로 값을 강제하지만 claude-cli 경로는 아니다 — 모르는 값은 버린다.
+            findings = [f for f in findings if f.get("severity") in SEVERITIES and f.get("status") in STATUSES]
             row = rows[(kind, label)]
             row["prs"] += 1
             for f in findings:
@@ -253,13 +280,16 @@ def main() -> int:
         )
     if not rows:
         lines.append("| - | - | 0 | - | - | - | - | - | - |")
+    if unknown_base:
+        lines += ["", f"ℹ️ 제외 {len(unknown_base)}건 — 리뷰 뒤 force-push 로 리뷰 시점 커밋을 알 수 없음"
+                  f" (reviewed-sha 표식 이전 리뷰): " + ", ".join(unknown_base)]
     if failed:
-        lines += ["", f"⚠️ 판정 실패 {len(failed)}건: " + ", ".join(failed)]
+        lines += ["", f"⚠️ 실패 {len(failed)}건: " + ", ".join(failed)]
     lines += ["", "<details><summary>PR 별 상세</summary>", ""]
     for pr, kind, label, findings in details:
         lines.append(f"- [#{pr['number']}]({pr['html_url']}) {pr['title']} — {KIND_LABEL[kind]} · {label}")
         for f in findings:
-            lines.append(f"  - `{f['severity']}` {f['status']} — {f['title']} ({f['evidence']})")
+            lines.append(f"  - `{f['severity']}` {f['status']} — {f.get('title', '')} ({f.get('evidence', '')})")
     lines += ["", "</details>", ""]
 
     report = "\n".join(lines)
