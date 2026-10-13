@@ -2,7 +2,7 @@
 // actions/github-script 스텝에서 require 해 쓴다:
 //   const pick = require(`${process.env.ACTION_DIR}/../scripts/review_tier.js`);
 //   await pick({ github, context, core, profile: 'small' });
-// outputs: model, effort, lines
+// outputs: model, effort, lines, split ('true' = 관점별 분할 리뷰 대상, DRT-6999)
 
 const LOCK_FILES = new Set([
   'pnpm-lock.yaml', 'package-lock.json', 'yarn.lock', 'bun.lockb',
@@ -27,6 +27,10 @@ const TIERS = {
   ],
 };
 
+// 이 라인 수를 넘으면 한 리뷰어가 diff 전체를 보지 않고 관점별로 나눠 본다 (DRT-6999).
+// 큰 diff 일수록 단일 리뷰 품질이 급락한다 (arXiv 2606.15689). big 프로필은 완결성 리뷰라 분할하지 않는다.
+const SPLIT_ABOVE = { small: 500 };
+
 function tierFor(profile, lines) {
   const [, model, effort] = TIERS[profile].find(([max]) => lines <= max);
   return { model, effort };
@@ -48,8 +52,11 @@ module.exports = async ({ github, context, core, profile }) => {
   const { model, effort } = tierFor(profile, lines);
   core.setOutput('model', model);
   core.setOutput('effort', effort);
+  const split = lines > (SPLIT_ABOVE[profile] ?? Infinity);
   core.setOutput('lines', String(lines));
-  console.log(`[review-tier] profile=${profile} lines=${lines} → ${model} / ${effort}`);
+  core.setOutput('split', String(split));
+  console.log(`[review-tier] profile=${profile} lines=${lines} → ${model} / ${effort}${split ? ' / split' : ''}`);
+  return { model, effort, lines, split };
 };
 
 module.exports.tierFor = tierFor;

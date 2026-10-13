@@ -247,7 +247,14 @@ runs:
         github-token: ${{ inputs.github_token }}
         script: |
           const pick = require(`${process.env.ACTION_DIR}/../scripts/review_tier.js`);
-          await pick({ github, context, core, profile: 'small' });
+          const { lines, split } = await pick({ github, context, core, profile: 'small' });
+          // 500줄 초과: 관점별 하위 리뷰어(Agent 도구)로 나눠 보고 합친다 (DRT-6999).
+          const fs = require('fs');
+          const splitPrompt = split
+            ? fs.readFileSync(`${process.env.ACTION_DIR}/split-review.md`, 'utf8').replace('__LINES__', String(lines))
+            : '';
+          core.setOutput('split_prompt', splitPrompt);
+          core.setOutput('extra_tools', split ? ',Agent,Task' : '');
 
     - name: Generate Django Code Review
       if: steps.check_max_rounds.outputs.should_skip != 'true'
@@ -261,6 +268,7 @@ runs:
           - Current round: ${{ steps.count_rounds.outputs.round_number }}
           - Previous reviews: ${{ steps.fetch_previous_reviews.outputs.previous_reviews }}
           - Ignore list (P2 items author marked as acceptable): ${{ steps.parse_ignore_list.outputs.ignore_list }}
+          - Review mode: ${{ steps.tier.outputs.split == 'true' && 'SPLIT (see SPLIT REVIEW MODE below)' || 'single reviewer' }}
           - External context: a file `.pr-context.md` in the repo root may hold the linked Linear issue(s) and Slack/Notion/Sentry content resolved from the PR description. If it exists, READ IT FIRST with the Read tool — it is the source of truth for what this PR must deliver. Do NOT invent context for links it reports as failed/unreadable.
 
           SCOPE — Items already covered by automated tools (DO NOT report these):
@@ -281,6 +289,8 @@ runs:
           - Every AC must be fully implemented by this PR — verify each against the code (cite file:line). Missing or partial AC → `[P1]`.
           - The PR must implement its AC exactly — no more, no less. Flag scope creep (substantive changes with no matching AC) as `[P2]`.
           - If the PR's AC diverge from the linked Linear issue's acceptance criteria, flag the mismatch.
+
+          ${{ steps.tier.outputs.split_prompt }}
 
           ---
 
@@ -349,7 +359,7 @@ runs:
 
           Save your ${{ inputs.review_language }} review to a file named '.claude-code-review.md' using Write tool. Do NOT post to PR yet.
 
-        claude_args: '--model ${{ steps.tier.outputs.model }} --effort ${{ steps.tier.outputs.effort }} --allowed-tools "Bash(gh pr diff:*),Bash(gh pr view:*),Bash(gh pr list:*),Write,Read,Glob,Grep"'
+        claude_args: '--model ${{ steps.tier.outputs.model }} --effort ${{ steps.tier.outputs.effort }} --allowed-tools "Bash(gh pr diff:*),Bash(gh pr view:*),Bash(gh pr list:*),Write,Read,Glob,Grep${{ steps.tier.outputs.extra_tools }}"'
 
     - name: Post review with marker
       if: steps.check_max_rounds.outputs.should_skip != 'true'
