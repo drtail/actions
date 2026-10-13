@@ -12,7 +12,11 @@ inputs:
   model:
     description: 'Claude model to use'
     required: false
-    default: 'claude-sonnet-4-6'
+    default: 'claude-sonnet-5-5'
+  effort:
+    description: 'Claude Code effort level (low|medium|high|xhigh|max)'
+    required: false
+    default: 'medium'
   language:
     description: 'Language for output'
     required: false
@@ -141,7 +145,7 @@ runs:
 
           IMPORTANT: Save output to '.pr-review-guide.md' using the Write tool. Do NOT post to PR.
 
-        claude_args: '--model ${{ inputs.model }} --allowed-tools "Bash(gh pr diff:*),Bash(gh pr view:*),Bash(gh pr list:*),Write,Read,Glob,Grep"'
+        claude_args: '--model ${{ inputs.model }} --effort ${{ inputs.effort }} --allowed-tools "Bash(gh pr diff:*),Bash(gh pr view:*),Bash(gh pr list:*),Write,Read,Glob,Grep"'
 
     - name: Post Guide to PR
       uses: actions/github-script@v7

@@ -12,7 +12,11 @@ inputs:
   model:
     description: 'Claude model to use for code review'
     required: false
-    default: 'claude-sonnet-4-6'
+    default: 'claude-sonnet-5-5'
+  effort:
+    description: 'Claude Code effort level (low|medium|high|xhigh|max)'
+    required: false
+    default: 'medium'
   review_language:
     description: 'Language for review output'
     required: false
@@ -165,7 +169,7 @@ runs:
 
           Save your ${{ inputs.review_language }} review to a file named '.claude-code-review.md' using Write tool. Do NOT post to PR yet.
 
-        claude_args: '--model ${{ inputs.model }} --allowed-tools "Bash(gh pr diff:*),Bash(gh pr view:*),Bash(gh pr list:*),Write,Read,Glob,Grep"'
+        claude_args: '--model ${{ inputs.model }} --effort ${{ inputs.effort }} --allowed-tools "Bash(gh pr diff:*),Bash(gh pr view:*),Bash(gh pr list:*),Write,Read,Glob,Grep"'
 
     - name: Post Review to PR
       uses: actions/github-script@v7
