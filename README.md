@@ -120,9 +120,9 @@ reported under "수집 실패" in `.pr-context.md` so the reviewer never guesses
 
 ### 4a. claude-django-review-loop — small PR (base ≠ trunk)
 
-Review-reflect-re-review loop (min 2, max 5 rounds). Verifies the PR's Acceptance Criteria are
+Review-reflect-re-review loop (ends on the first APPROVED round, max 5 rounds). Verifies the PR's Acceptance Criteria are
 implemented **exactly — no more, no less** against the diff and the linked Linear issue, plus
-N+1 / architecture / security / tests. Posts `## ✅ AI Review APPROVED` once clean (round ≥ 2),
+N+1 / architecture / security / tests. Posts `## ✅ AI Review APPROVED` once clean (any round),
 which is what lets the author merge.
 
 ```yaml

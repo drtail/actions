@@ -1,5 +1,5 @@
 name: 'Claude Django Code Review (Loop)'
-description: 'AI-powered Django code review with review-reflect-re-review loop (min 2, max 5 rounds)'
+description: 'AI-powered Django code review with review-reflect-re-review loop (stops on first APPROVED, max 5 rounds)'
 author: 'drtail'
 
 inputs:
@@ -402,8 +402,9 @@ runs:
 
           console.log(`Round: ${roundNumber}, P1: ${hasP1}, P2 count: ${p2Count}, IgnoreCount: ${ignoreCount}`);
 
-          // P1 is never ignorable; approve when round >= 2, no P1, and P2 count covered by ignore list
-          if (roundNumber >= 2 && !hasP1 && (p2Count === 0 || p2Count <= ignoreCount)) {
+          // P1 is never ignorable; approve (any round) when no P1 and P2 count covered by ignore list.
+          // Round 1 approval ends the loop — matches the team rule "R1 APPROVED 면 종료" (DRT-6998).
+          if (!hasP1 && (p2Count === 0 || p2Count <= ignoreCount)) {
             await github.rest.issues.createComment({
               owner: context.repo.owner,
               repo: context.repo.repo,
@@ -412,7 +413,7 @@ runs:
             });
             console.log('APPROVED comment posted');
           } else {
-            console.log('Not approved yet - issues remain or first round');
+            console.log('Not approved yet - P1 or unignored P2 remain');
           }
 
     - name: Remove AI Review label
