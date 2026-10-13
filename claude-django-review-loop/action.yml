@@ -1,5 +1,5 @@
 name: 'Claude Django Code Review (Loop)'
-description: 'AI-powered Django code review with review-reflect-re-review loop (min 2, max 5 rounds)'
+description: 'AI-powered Django code review with review-reflect-re-review loop (stops on first APPROVED, max 5 rounds)'
 author: 'drtail'
 
 inputs:
@@ -237,6 +237,18 @@ runs:
       run: |
         python3 "${GITHUB_ACTION_PATH}/../scripts/fetch_pr_context.py" || echo "context fetch skipped (non-fatal)"
 
+    - name: Pick review model/effort by PR size
+      id: tier
+      if: steps.check_max_rounds.outputs.should_skip != 'true'
+      uses: actions/github-script@v7
+      env:
+        ACTION_DIR: ${{ github.action_path }}
+      with:
+        github-token: ${{ inputs.github_token }}
+        script: |
+          const pick = require(`${process.env.ACTION_DIR}/../scripts/review_tier.js`);
+          await pick({ github, context, core, profile: 'small' });
+
     - name: Generate Django Code Review
       if: steps.check_max_rounds.outputs.should_skip != 'true'
       uses: anthropics/claude-code-action@v1
@@ -255,6 +267,9 @@ runs:
           - Code style/formatting → covered by Ruff
           - Type errors → covered by mypy
           - Module import direction violations → covered by import-linter
+          - Wording of log messages, comments, docstrings, or Korean text; naming taste; readability-only refactors
+          - Micro-optimizations with no measurable impact on a hot path
+          CONFIDENCE: if you are speculating ("could potentially…", "might…") and cannot name the line and the concrete failure, it is at most `[P3]` — never P1/P2.
           DO report: architectural violations beyond import direction (e.g., business logic in wrong layer), N+1 queries, logic bugs, security issues.
 
           If round 2+, focus on:
@@ -332,7 +347,7 @@ runs:
 
           Save your ${{ inputs.review_language }} review to a file named '.claude-code-review.md' using Write tool. Do NOT post to PR yet.
 
-        claude_args: '--model claude-sonnet-5 --allowed-tools "Bash(gh pr diff:*),Bash(gh pr view:*),Bash(gh pr list:*),Write,Read,Glob,Grep"'
+        claude_args: '--model ${{ steps.tier.outputs.model }} --effort ${{ steps.tier.outputs.effort }} --allowed-tools "Bash(gh pr diff:*),Bash(gh pr view:*),Bash(gh pr list:*),Write,Read,Glob,Grep"'
 
     - name: Post review with marker
       if: steps.check_max_rounds.outputs.should_skip != 'true'
@@ -357,7 +372,7 @@ runs:
             owner: context.repo.owner,
             repo: context.repo.repo,
             issue_number: context.issue.number,
-            body: `## Claude Django Code Review (Round ${roundNumber})\n\n${review}\n\n<!-- ai-review-round: ${roundNumber} -->`
+            body: `## Claude Django Code Review (Round ${roundNumber})\n\n${review}\n\n<sub>🧠 ${{ steps.tier.outputs.model }} · effort ${{ steps.tier.outputs.effort }} · ${{ steps.tier.outputs.lines }}줄 (lock 파일 제외)</sub>\n\n<!-- ai-review-round: ${roundNumber} -->`
           });
 
           console.log(`Review posted successfully (Round ${roundNumber})`);
@@ -387,8 +402,9 @@ runs:
 
           console.log(`Round: ${roundNumber}, P1: ${hasP1}, P2 count: ${p2Count}, IgnoreCount: ${ignoreCount}`);
 
-          // P1 is never ignorable; approve when round >= 2, no P1, and P2 count covered by ignore list
-          if (roundNumber >= 2 && !hasP1 && (p2Count === 0 || p2Count <= ignoreCount)) {
+          // P1 is never ignorable; approve (any round) when no P1 and P2 count covered by ignore list.
+          // Round 1 approval ends the loop — matches the team rule "R1 APPROVED 면 종료" (DRT-6998).
+          if (!hasP1 && (p2Count === 0 || p2Count <= ignoreCount)) {
             await github.rest.issues.createComment({
               owner: context.repo.owner,
               repo: context.repo.repo,
@@ -397,7 +413,7 @@ runs:
             });
             console.log('APPROVED comment posted');
           } else {
-            console.log('Not approved yet - issues remain or first round');
+            console.log('Not approved yet - P1 or unignored P2 remain');
           }
 
     - name: Remove AI Review label
