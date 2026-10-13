@@ -335,6 +335,8 @@ runs:
           - Group related items under category headings
           - End with conclusion section restating the decision
           - Do NOT mention "CLAUDE.md" in your review output
+          - Use the backtick `[Pn]` badge ONLY for issues that are still open in this round. When you mention a previous round's item that is now resolved, write it without backticks (e.g. "P2 (해소)").
+          - The LAST line of the file must be exactly: `<!-- open-issues: P1=<n> P2=<n> -->` where <n> counts only issues still open in this round (P2 items covered by the ignore list still count; the workflow subtracts them).
           - Provide concrete code examples where helpful
 
           **Self-Check Before Finalizing:**
@@ -396,8 +398,13 @@ runs:
           }
 
           const roundNumber = parseInt('${{ steps.count_rounds.outputs.round_number }}');
-          const hasP1 = /`\[P1\]`/.test(review);
-          const p2Count = (review.match(/`\[P2\]`/g) || []).length;
+          // 리뷰어가 남긴 '열린 지적 수' 마커를 우선 쓴다. 본문의 `[P2]` 를 글자 그대로 세면
+          // 회차 2 이상에서 "`[P2]` → 해소" 처럼 해결된 항목까지 세어져 승인이 영영 안 난다
+          // (mochii-server#1007 Round 2 실측: 열린 지적 0건인데 P2 count 3). 마커가 없으면 예전 방식.
+          const marker = review.match(/<!--\s*open-issues:\s*P1=(\d+)\s+P2=(\d+)\s*-->/);
+          const hasP1 = marker ? parseInt(marker[1]) > 0 : /`\[P1\]`/.test(review);
+          const p2Count = marker ? parseInt(marker[2]) : (review.match(/`\[P2\]`/g) || []).length;
+          console.log(`open-issues marker: ${marker ? marker[0] : 'missing — falling back to badge count'}`);
           const ignoreCount = parseInt(process.env.IGNORE_COUNT || '0');
 
           console.log(`Round: ${roundNumber}, P1: ${hasP1}, P2 count: ${p2Count}, IgnoreCount: ${ignoreCount}`);
