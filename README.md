@@ -96,7 +96,8 @@ This action labels PRs based on the PR title and duplicate patterns.
 ## 4. AI PR Review (small & big)
 
 Two composite actions review PRs with Claude for the Linear-issue-based workflow. Both
-**hardcode the model (`claude-sonnet-5`)** — consuming repos cannot override it — and both
+**pick the model and effort from the PR size** (`scripts/review_tier.js`, DRT-6998) —
+consuming repos cannot override it — and both
 resolve external links (Linear / Slack / Notion / Sentry) found in the PR body via
 `scripts/fetch_pr_context.py`, writing `.pr-context.md` for the reviewer to read.
 
@@ -105,6 +106,17 @@ Tokens come from **organization secrets** (`LINEAR_API_KEY`, `SLACK_BOT_TOKEN`,
 passed through as inputs; a missing/unscoped token simply skips that source (never fails the
 review). A link that can't be read (Slack bot not in channel, Notion page not shared, …) is
 reported under "수집 실패" in `.pr-context.md` so the reviewer never guesses.
+
+**Model / effort tiers** — lines = additions + deletions, lock files excluded
+(`pnpm-lock.yaml`, `uv.lock`, …). The chosen tier is printed at the bottom of each review comment.
+
+| Action | Lines | Model | Effort |
+|---|---|---|---|
+| small PR (`claude-django-review-loop`) | ≤ 200 | `claude-sonnet-5-5` | `medium` |
+| | 201 – 500 | `claude-sonnet-5-5` | `high` |
+| | > 500 | `claude-opus-5-5` | `high` |
+| big PR (`claude-parent-review`) | ≤ 2000 | `claude-opus-5-5` | `high` |
+| | > 2000 | `claude-opus-5-5` | `xhigh` |
 
 ### 4a. claude-django-review-loop — small PR (base ≠ trunk)
 
