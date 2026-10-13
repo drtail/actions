@@ -172,3 +172,38 @@ Intentionally **does not** emit an APPROVED marker (the human reviewer merges).
 Each consuming repo should have a `CLAUDE.md` documenting architecture, conventions, and test
 standards. The older single-shot `claude-django-review` action is kept for backward
 compatibility but is superseded by `claude-django-review-loop`.
+
+### 4c. review-resolution-report — weekly fix rate of AI Review findings (DRT-7000)
+
+For every PR merged in the window, takes the bot's **first** review (small loop Round 1, app review,
+big parent review), extracts the findings it asked to fix (P1/P2, 🔴/🟡, AC rows 미충족/부분), and asks
+Claude (`claude-haiku-5-5` by default) whether the diff the author pushed **after** that review fixed each
+one. Writes a table per review kind × model · effort to the Actions step summary:
+
+    해결률 = 해결 / (해결 + 미해결)   — waived (listed in "🚫 AI Review Ignore") and unclear are excluded
+
+Reviews posted before DRT-6998 have no model footer and are grouped as "이전 모델", so a long window
+(`days: 60`) gives a before/after comparison of the model tiers.
+
+```yaml
+on:
+  schedule:
+    - cron: '0 0 * * 1'   # Monday 09:00 KST
+  workflow_dispatch:
+    inputs:
+      days: { description: 'Look-back days', default: '7' }
+permissions:
+  contents: read
+  pull-requests: read
+jobs:
+  report:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: drtail/actions/review-resolution-report@main
+        with:
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          days: ${{ inputs.days || '7' }}
+```
+
+Local run (no API key): `JUDGE_BACKEND=claude-cli GITHUB_TOKEN=… GITHUB_REPOSITORY=drtail/mochii-server DAYS=7 python3 scripts/review_resolution_report.py`

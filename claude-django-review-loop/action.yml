@@ -374,7 +374,7 @@ runs:
             owner: context.repo.owner,
             repo: context.repo.repo,
             issue_number: context.issue.number,
-            body: `## Claude Django Code Review (Round ${roundNumber})\n\n${review}\n\n<sub>🧠 ${{ steps.tier.outputs.model }} · effort ${{ steps.tier.outputs.effort }} · ${{ steps.tier.outputs.lines }}줄 (lock 파일 제외)</sub>\n\n<!-- ai-review-round: ${roundNumber} -->`
+            body: `## Claude Django Code Review (Round ${roundNumber})\n\n${review}\n\n<sub>🧠 ${{ steps.tier.outputs.model }} · effort ${{ steps.tier.outputs.effort }} · ${{ steps.tier.outputs.lines }}줄 (lock 파일 제외)</sub>\n\n<!-- reviewed-sha: ${{ github.event.pull_request.head.sha }} -->\n<!-- ai-review-round: ${roundNumber} -->`
           });
 
           console.log(`Review posted successfully (Round ${roundNumber})`);

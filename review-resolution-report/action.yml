@@ -1,0 +1,35 @@
+name: 'AI Review Resolution Report'
+description: 'Weekly rate of AI Review findings actually fixed before merge, by review kind and model/effort (DRT-7000)'
+author: 'drtail'
+
+# 머지된 PR 마다 봇의 첫 리뷰 지적이 머지 전에 고쳐졌는지 Claude 로 판정하고,
+# 리뷰 종류 × 모델 · effort 별 해결률 표를 Actions 실행 요약(Step Summary)에 쓴다.
+# 소비 레포의 주간 스케줄 워크플로에서 부른다 (자기 레포 GITHUB_TOKEN 으로 읽기만 함).
+
+inputs:
+  anthropic_api_key:
+    description: 'Anthropic API Key (judge)'
+    required: true
+  github_token:
+    description: 'GitHub token with pull-requests: read'
+    required: true
+  days:
+    description: 'Look-back window in days'
+    required: false
+    default: '7'
+  judge_model:
+    description: 'Model that judges whether each finding was fixed'
+    required: false
+    default: 'claude-haiku-5-5'
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Build resolution report
+      shell: bash
+      env:
+        GITHUB_TOKEN: ${{ inputs.github_token }}
+        ANTHROPIC_API_KEY: ${{ inputs.anthropic_api_key }}
+        DAYS: ${{ inputs.days }}
+        JUDGE_MODEL: ${{ inputs.judge_model }}
+      run: python3 "${GITHUB_ACTION_PATH}/../scripts/review_resolution_report.py"
