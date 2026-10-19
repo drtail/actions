@@ -413,7 +413,7 @@ runs:
           - Start with review decision header (## ❌ REQUEST CHANGES / ## 💬 COMMENT / ## ✅ APPROVED)
           - Format each review item: `` `[Pn]` `` badge (backtick-wrapped) + descriptive title, file:line reference, explanation
           - Group related items under category headings
-          - End with conclusion section restating the decision
+          - End with a conclusion stating the decision in plain prose. Never repeat the canonical decision header in the conclusion or elsewhere; it belongs only on the first line.
           - Do NOT mention "CLAUDE.md" in your review output
           - Use the backtick `[Pn]` badge ONLY for issues that are still open in this round. When you mention a previous round's item that is now resolved, write it without backticks (e.g. "P2 (해소)").
           - Use the decision header exactly once, as the first line. REQUEST CHANGES requires at least one open P1/P2 issue.
@@ -426,6 +426,7 @@ runs:
           - Confirm all database queries are traced end-to-end
           - Confirm no security issues were overlooked
           - Confirm file:line references are accurate
+          - Before saving the file, confirm the canonical decision header occurs exactly once, on the first line, and the two required machine-readable markers remain the final two lines.
 
           IMPORTANT: Never write files to /tmp/ or any directory outside the repository root.
 
