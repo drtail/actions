@@ -1,5 +1,5 @@
 name: 'Claude Django Code Review (Loop)'
-description: 'AI-powered Django code review with review-reflect-re-review loop (stops on first APPROVED, max 5 rounds)'
+description: 'AI-powered Django code review with configurable round limit (default 5)'
 author: 'drtail'
 
 inputs:
@@ -38,12 +38,57 @@ inputs:
     required: false
     default: ''
 
+  max_rounds:
+    description: 'Maximum review rounds (positive integer); existing callers keep 5'
+    required: false
+    default: '5'
+  pr_number:
+    description: 'Optional target PR number for manual workflows; otherwise use the event PR'
+    required: false
+    default: ''
+
 runs:
   using: 'composite'
   steps:
+    - name: Resolve review PR and validate inputs
+      id: resolve_pr
+      uses: actions/github-script@v7
+      env:
+        REQUESTED_PR: ${{ inputs.pr_number }}
+        MAX_ROUNDS: ${{ inputs.max_rounds }}
+      with:
+        github-token: ${{ inputs.github_token }}
+        script: |
+          const positiveInteger = (value, name) => {
+            const text = String(value).trim();
+            const number = Number(text);
+            if (!/^[1-9]\d*$/.test(text) || !Number.isSafeInteger(number)) {
+              throw new Error(`${name} must be a positive safe integer.`);
+            }
+            return number;
+          };
+          const maxRounds = positiveInteger(process.env.MAX_ROUNDS, 'max_rounds');
+          const requested = process.env.REQUESTED_PR.trim()
+            || context.payload.pull_request?.number || context.issue.number || '';
+          const number = positiveInteger(requested, 'pr_number');
+          const { data: pr } = await github.rest.pulls.get({
+            ...context.repo, pull_number: number,
+          });
+          if (!pr.head.repo || !/^[a-f0-9]{40}$/i.test(pr.head.sha)) {
+            throw new Error('The PR must have an available head repository and commit.');
+          }
+          core.setOutput('pr_number', String(pr.number));
+          core.setOutput('head_sha', pr.head.sha);
+          core.setOutput('head_repository', pr.head.repo.full_name);
+          core.setOutput('pr_body', pr.body || '');
+          core.setOutput('pr_context', JSON.stringify(pr));
+          core.setOutput('max_rounds', String(maxRounds));
+
     - name: Checkout repository
       uses: actions/checkout@v4
       with:
+        repository: ${{ steps.resolve_pr.outputs.head_repository }}
+        ref: ${{ steps.resolve_pr.outputs.head_sha }}
         fetch-depth: 0
 
     - name: Count rounds
@@ -60,7 +105,7 @@ runs:
             const comments = await github.rest.issues.listComments({
               owner: context.repo.owner,
               repo: context.repo.repo,
-              issue_number: context.issue.number,
+              issue_number: Number('${{ steps.resolve_pr.outputs.pr_number }}'),
               per_page: 100,
               page: page
             });
@@ -90,14 +135,15 @@ runs:
       with:
         github-token: ${{ inputs.github_token }}
         script: |
-          const roundNumber = parseInt('${{ steps.count_rounds.outputs.round_number }}');
+          const roundNumber = Number('${{ steps.count_rounds.outputs.round_number }}');
+          const maxRounds = Number('${{ steps.resolve_pr.outputs.max_rounds }}');
 
-          if (roundNumber > 5) {
+          if (roundNumber > maxRounds) {
             await github.rest.issues.createComment({
               owner: context.repo.owner,
               repo: context.repo.repo,
-              issue_number: context.issue.number,
-              body: '## 🔄 AI Review 최대 회차 초과\n\n5회차 리뷰가 완료되었습니다. 더 이상 자동 리뷰를 진행하지 않습니다. 개발자가 직접 검토해 주세요.'
+              issue_number: Number('${{ steps.resolve_pr.outputs.pr_number }}'),
+              body: `## 🔄 AI Review 최대 회차 초과\n\n${maxRounds}회차 리뷰가 완료되었습니다. 더 이상 자동 리뷰를 진행하지 않습니다. 개발자가 직접 검토해 주세요.`
             });
             console.log('Max rounds exceeded. Setting skip flag.');
             core.setOutput('should_skip', 'true');
@@ -121,7 +167,7 @@ runs:
             const comments = await github.rest.issues.listComments({
               owner: context.repo.owner,
               repo: context.repo.repo,
-              issue_number: context.issue.number,
+              issue_number: Number('${{ steps.resolve_pr.outputs.pr_number }}'),
               per_page: 100,
               page: page
             });
@@ -171,7 +217,7 @@ runs:
             const comments = await github.rest.issues.listComments({
               owner: context.repo.owner,
               repo: context.repo.repo,
-              issue_number: context.issue.number,
+              issue_number: Number('${{ steps.resolve_pr.outputs.pr_number }}'),
               per_page: 100,
               page: page
             });
@@ -203,10 +249,12 @@ runs:
       id: parse_ignore_list
       if: steps.check_max_rounds.outputs.should_skip != 'true'
       uses: actions/github-script@v7
+      env:
+        PR_BODY: ${{ steps.resolve_pr.outputs.pr_body }}
       with:
         github-token: ${{ inputs.github_token }}
         script: |
-          const body = context.payload.pull_request.body || '';
+          const body = process.env.PR_BODY || '';
           const items = [];
 
           const sectionMatch = body.match(/# 🚫 AI Review Ignore([\s\S]*?)(?=\n# |$)/);
@@ -229,7 +277,7 @@ runs:
       if: steps.check_max_rounds.outputs.should_skip != 'true'
       shell: bash
       env:
-        PR_BODY: ${{ github.event.pull_request.body }}
+        PR_BODY: ${{ steps.resolve_pr.outputs.pr_body }}
         LINEAR_API_KEY: ${{ inputs.linear_api_key }}
         SLACK_BOT_TOKEN: ${{ inputs.slack_bot_token }}
         NOTION_API_KEY: ${{ inputs.notion_api_key }}
@@ -243,11 +291,19 @@ runs:
       uses: actions/github-script@v7
       env:
         ACTION_DIR: ${{ github.action_path }}
+        PR_CONTEXT: ${{ steps.resolve_pr.outputs.pr_context }}
       with:
         github-token: ${{ inputs.github_token }}
         script: |
           const pick = require(`${process.env.ACTION_DIR}/../scripts/review_tier.js`);
-          const { lines, split } = await pick({ github, context, core, profile: 'small' });
+          const pullRequest = JSON.parse(process.env.PR_CONTEXT);
+          const reviewContext = {
+            ...context,
+            repo: context.repo,
+            issue: { ...context.issue, number: pullRequest.number },
+            payload: { ...context.payload, pull_request: pullRequest },
+          };
+          const { lines, split } = await pick({ github, context: reviewContext, core, profile: 'small' });
           // 500줄 초과: 관점별 하위 리뷰어(Agent 도구)로 나눠 보고 합친다 (DRT-6999).
           const fs = require('fs');
           const splitPrompt = split
@@ -255,6 +311,11 @@ runs:
             : '';
           core.setOutput('split_prompt', splitPrompt);
           core.setOutput('extra_tools', split ? ',Agent,Task' : '');
+
+    - name: Clear only the pending review output
+      if: steps.check_max_rounds.outputs.should_skip != 'true'
+      shell: bash
+      run: rm -f -- .claude-code-review.md
 
     - name: Generate Django Code Review
       if: steps.check_max_rounds.outputs.should_skip != 'true'
@@ -267,6 +328,7 @@ runs:
         CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS: '900000'
       with:
         anthropic_api_key: ${{ inputs.anthropic_api_key }}
+        github_token: ${{ inputs.github_token }}
         allowed_bots: ${{ inputs.allowed_bots }}
         show_full_output: true
         prompt: |
@@ -301,7 +363,9 @@ runs:
           ---
 
           REPO: ${{ github.repository }}
-          PR NUMBER: ${{ github.event.pull_request.number }}
+          PR NUMBER: ${{ steps.resolve_pr.outputs.pr_number }}
+          REVIEWED HEAD SHA: ${{ steps.resolve_pr.outputs.head_sha }}
+          Review this checked-out SHA. If the PR head changes, do not claim the new head was reviewed.
 
           You are a senior Django backend engineer reviewing this PR.
           First, read the project's CLAUDE.md file (if it exists) to understand project-specific conventions, architecture patterns, and coding standards. Apply those conventions throughout your review.
@@ -340,8 +404,8 @@ runs:
           - **P5**: Nitpicks, optional enhancements (FYI)
 
           **Review Decision Criteria:**
-          - P1 or P2 issues found → REQUEST_CHANGES
-          - Only P3-P5 issues found → COMMENT
+          - P1 or unignored P2 issues found → REQUEST_CHANGES
+          - Only P3-P5 issues or explicitly accepted ignore-list P2 issues found → COMMENT
           - All good → APPROVE
 
           **Output Requirements:**
@@ -349,10 +413,12 @@ runs:
           - Start with review decision header (## ❌ REQUEST CHANGES / ## 💬 COMMENT / ## ✅ APPROVED)
           - Format each review item: `` `[Pn]` `` badge (backtick-wrapped) + descriptive title, file:line reference, explanation
           - Group related items under category headings
-          - End with conclusion section restating the decision
+          - End with a conclusion stating the decision in plain prose. Never repeat the canonical decision header in the conclusion or elsewhere; it belongs only on the first line.
           - Do NOT mention "CLAUDE.md" in your review output
           - Use the backtick `[Pn]` badge ONLY for issues that are still open in this round. When you mention a previous round's item that is now resolved, write it without backticks (e.g. "P2 (해소)").
-          - The LAST line of the file must be exactly: `<!-- open-issues: P1=<n> P2=<n> -->` where <n> counts only issues still open in this round (P2 items covered by the ignore list still count; the workflow subtracts them).
+          - Use the decision header exactly once, as the first line. REQUEST CHANGES requires at least one open P1/P2 issue.
+          - If P1=0 and P2=0, include this exact standalone machine-readable sentence: `No open P1/P2 issues.`
+          - The final TWO lines must be exactly `<!-- open-issues: P1=<n> P2=<n> -->` then `<!-- reviewed-sha: ${{ steps.resolve_pr.outputs.head_sha }} -->`. Use each marker once. Counts include only issues still open this round; accepted ignore-list P2 issues still count. Never claim a SHA other than the checked-out SHA above.
           - Provide concrete code examples where helpful
 
           **Self-Check Before Finalizing:**
@@ -360,6 +426,7 @@ runs:
           - Confirm all database queries are traced end-to-end
           - Confirm no security issues were overlooked
           - Confirm file:line references are accurate
+          - Before saving the file, confirm the canonical decision header occurs exactly once, on the first line, and the two required machine-readable markers remain the final two lines.
 
           IMPORTANT: Never write files to /tmp/ or any directory outside the repository root.
 
@@ -370,9 +437,22 @@ runs:
     - name: Post review with marker
       if: steps.check_max_rounds.outputs.should_skip != 'true'
       uses: actions/github-script@v7
+      env:
+        REVIEWED_PR_BODY: ${{ steps.resolve_pr.outputs.pr_body }}
+        REVIEW_VALIDATOR_PATH: ${{ github.action_path }}/scripts/validate-review.cjs
+        IGNORE_COUNT: ${{ steps.parse_ignore_list.outputs.ignore_count }}
       with:
         github-token: ${{ inputs.github_token }}
         script: |
+          const { data: currentPR } = await github.rest.pulls.get({
+            ...context.repo,
+            pull_number: Number('${{ steps.resolve_pr.outputs.pr_number }}'),
+          });
+          if (currentPR.head.sha !== '${{ steps.resolve_pr.outputs.head_sha }}'
+              || (currentPR.body || '') !== process.env.REVIEWED_PR_BODY) {
+            throw new Error('PR head or body changed during review; rerun on the current PR.');
+          }
+
           const fs = require('fs');
 
           let review;
@@ -384,13 +464,18 @@ runs:
             return;
           }
 
+          const parseReview = require(process.env.REVIEW_VALIDATOR_PATH);
+          parseReview(
+            review, '${{ steps.resolve_pr.outputs.head_sha }}',
+            Number(process.env.IGNORE_COUNT || '0')
+          );
           const roundNumber = '${{ steps.count_rounds.outputs.round_number }}';
 
           await github.rest.issues.createComment({
             owner: context.repo.owner,
             repo: context.repo.repo,
-            issue_number: context.issue.number,
-            body: `## Claude Django Code Review (Round ${roundNumber})\n\n${review}\n\n<sub>🧠 ${{ steps.tier.outputs.model }} · effort ${{ steps.tier.outputs.effort }} · ${{ steps.tier.outputs.lines }}줄 (lock 파일 제외)</sub>\n\n<!-- reviewed-sha: ${{ github.event.pull_request.head.sha }} -->\n<!-- ai-review-round: ${roundNumber} -->`
+            issue_number: Number('${{ steps.resolve_pr.outputs.pr_number }}'),
+            body: `## Claude Django Code Review (Round ${roundNumber})\n\n${review}\n\n<sub>🧠 ${{ steps.tier.outputs.model }} · effort ${{ steps.tier.outputs.effort }} · ${{ steps.tier.outputs.lines }}줄 (lock 파일 제외)</sub>\n\n<!-- ai-review-round: ${roundNumber} -->`
           });
 
           console.log(`Review posted successfully (Round ${roundNumber})`);
@@ -399,40 +484,50 @@ runs:
       if: steps.check_max_rounds.outputs.should_skip != 'true'
       uses: actions/github-script@v7
       env:
+        REVIEWED_PR_BODY: ${{ steps.resolve_pr.outputs.pr_body }}
+        REVIEW_VALIDATOR_PATH: ${{ github.action_path }}/scripts/validate-review.cjs
         IGNORE_COUNT: ${{ steps.parse_ignore_list.outputs.ignore_count }}
       with:
         github-token: ${{ inputs.github_token }}
         script: |
+          const { data: currentPR } = await github.rest.pulls.get({
+            ...context.repo,
+            pull_number: Number('${{ steps.resolve_pr.outputs.pr_number }}'),
+          });
+          if (currentPR.head.sha !== '${{ steps.resolve_pr.outputs.head_sha }}'
+              || (currentPR.body || '') !== process.env.REVIEWED_PR_BODY) {
+            throw new Error('PR head or body changed during review; rerun on the current PR.');
+          }
+
           const fs = require('fs');
 
           let review;
           try {
             review = fs.readFileSync('.claude-code-review.md', 'utf8');
           } catch (error) {
-            console.log('Could not read review file for evaluation');
-            return;
+            throw new Error('Review file missing during evaluation.');
           }
 
           const roundNumber = parseInt('${{ steps.count_rounds.outputs.round_number }}');
-          // 리뷰어가 남긴 '열린 지적 수' 마커를 우선 쓴다. 본문의 `[P2]` 를 글자 그대로 세면
-          // 회차 2 이상에서 "`[P2]` → 해소" 처럼 해결된 항목까지 세어져 승인이 영영 안 난다
-          // (mochii-server#1007 Round 2 실측: 열린 지적 0건인데 P2 count 3). 마커가 없으면 예전 방식.
-          const marker = review.match(/<!--\s*open-issues:\s*P1=(\d+)\s+P2=(\d+)\s*-->/);
-          const hasP1 = marker ? parseInt(marker[1]) > 0 : /`\[P1\]`/.test(review);
-          const p2Count = marker ? parseInt(marker[2]) : (review.match(/`\[P2\]`/g) || []).length;
-          console.log(`open-issues marker: ${marker ? marker[0] : 'missing — falling back to badge count'}`);
+          const parseReview = require(process.env.REVIEW_VALIDATOR_PATH);
+          const { decision, p1, p2: p2Count } = parseReview(
+            review, '${{ steps.resolve_pr.outputs.head_sha }}',
+            Number(process.env.IGNORE_COUNT || '0')
+          );
+          const hasP1 = p1 > 0;
           const ignoreCount = parseInt(process.env.IGNORE_COUNT || '0');
 
           console.log(`Round: ${roundNumber}, P1: ${hasP1}, P2 count: ${p2Count}, IgnoreCount: ${ignoreCount}`);
 
           // P1 is never ignorable; approve (any round) when no P1 and P2 count covered by ignore list.
           // Round 1 approval ends the loop — matches the team rule "R1 APPROVED 면 종료" (DRT-6998).
-          if (!hasP1 && (p2Count === 0 || p2Count <= ignoreCount)) {
+          if (decision !== '❌ REQUEST CHANGES'
+              && !hasP1 && (p2Count === 0 || p2Count <= ignoreCount)) {
             await github.rest.issues.createComment({
               owner: context.repo.owner,
               repo: context.repo.repo,
-              issue_number: context.issue.number,
-              body: `## ✅ AI Review APPROVED\n\n${roundNumber}회차 리뷰 완료. P1 없음, P2 ${p2Count}건 (무시 사유 ${ignoreCount}건). LGTM!`
+              issue_number: Number('${{ steps.resolve_pr.outputs.pr_number }}'),
+              body: `## ✅ AI Review APPROVED\n\n${roundNumber}회차 리뷰 완료. P1 없음, P2 ${p2Count}건 (무시 사유 ${ignoreCount}건). LGTM!\n\n<!-- reviewed-sha: ${{ steps.resolve_pr.outputs.head_sha }} -->`
             });
             console.log('APPROVED comment posted');
           } else {
@@ -449,7 +544,7 @@ runs:
             await github.rest.issues.removeLabel({
               owner: context.repo.owner,
               repo: context.repo.repo,
-              issue_number: context.issue.number,
+              issue_number: Number('${{ steps.resolve_pr.outputs.pr_number }}'),
               name: '${{ inputs.trigger_label }}'
             });
             console.log('Removed "${{ inputs.trigger_label }}" label after successful review');
