@@ -328,6 +328,7 @@ runs:
         CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS: '900000'
       with:
         anthropic_api_key: ${{ inputs.anthropic_api_key }}
+        github_token: ${{ inputs.github_token }}
         allowed_bots: ${{ inputs.allowed_bots }}
         show_full_output: true
         prompt: |
