@@ -1,5 +1,5 @@
 name: 'Claude Django Code Review (Loop)'
-description: 'AI-powered Django code review with review-reflect-re-review loop (stops on first APPROVED, max 5 rounds)'
+description: 'AI-powered Django code review with review-reflect-re-review loop (stops on first APPROVED, max 8 rounds)'
 author: 'drtail'
 
 inputs:
@@ -92,12 +92,12 @@ runs:
         script: |
           const roundNumber = parseInt('${{ steps.count_rounds.outputs.round_number }}');
 
-          if (roundNumber > 5) {
+          if (roundNumber > 8) {
             await github.rest.issues.createComment({
               owner: context.repo.owner,
               repo: context.repo.repo,
               issue_number: context.issue.number,
-              body: '## 🔄 AI Review 최대 회차 초과\n\n5회차 리뷰가 완료되었습니다. 더 이상 자동 리뷰를 진행하지 않습니다. 개발자가 직접 검토해 주세요.'
+              body: '## 🔄 AI Review 최대 회차 초과\n\n8회차 리뷰가 완료되었습니다. 더 이상 자동 리뷰를 진행하지 않습니다. 개발자가 직접 검토해 주세요.'
             });
             console.log('Max rounds exceeded. Setting skip flag.');
             core.setOutput('should_skip', 'true');
