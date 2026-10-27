@@ -90,8 +90,12 @@ runs:
 
     # JS/RN 프로젝트용 게이트 — 최신 이벤트가 sourcemap 심볼리케이션에 실패했으면
     # 읽을 수 없는(minified) 스택으로 autofix 를 돌리지 않고 스킵한다.
-    # 판정: ① 이벤트 processing error 에 sourcemap/symbolication 계열 오류 존재
-    #       ② in_app 프레임 중 원본 코드 컨텍스트(context_line)가 채워진 프레임 0개
+    # 판정: in_app 프레임 중 원본 코드 컨텍스트가 붙은 프레임이 0개면 스킵.
+    #   - events/latest/ API 는 원본 코드를 `context`([[줄번호, 코드], ...]) 로 준다.
+    #     `contextLine`/`context_line` 은 원시 이벤트 JSON 형식이라 여기선 비어 온다 (DRT-7251).
+    #   - sourcemap 계열 processing error 는 로그로만 남긴다 — Hermes 번들 1행의 런타임
+    #     프레임(tryCallOne 등)은 원래 매핑이 없어 js_invalid_sourcemap_location 이 거의
+    #     모든 이벤트에 붙는다.
     - name: Check sourcemap symbolication
       id: symbolication
       shell: bash
@@ -116,11 +120,12 @@ runs:
         PROC_ERRORS=$(echo "$EVENT" | jq '[.errors[]? | select((.type // "") | test("source|symbolicat"))] | length' 2>/dev/null || echo 0)
         CTX_FRAMES=$(echo "$EVENT" | jq '[.entries[]? | select(.type == "exception")
           | .data.values[]? | .stacktrace.frames[]?
-          | select(((.inApp // .in_app) == true) and ((.contextLine // .context_line) != null))] | length' 2>/dev/null || echo 0)
+          | select(((.inApp // .in_app) == true)
+              and ((((.context // []) | length) > 0) or ((.contextLine // .context_line) != null)))] | length' 2>/dev/null || echo 0)
 
         echo "symbolication check: processing_errors=$PROC_ERRORS, in_app_frames_with_context=$CTX_FRAMES"
 
-        if [ "${PROC_ERRORS:-0}" -gt 0 ] || [ "${CTX_FRAMES:-0}" -eq 0 ]; then
+        if [ "${CTX_FRAMES:-0}" -eq 0 ]; then
           echo "ok=false" >> $GITHUB_OUTPUT
           if [ -n "$SLACK_BOT_TOKEN" ] && [ -n "$SLACK_CHANNEL_ID" ]; then
             TEXT=$(printf '🗺️ [%s] Sentry 이벤트가 sourcemap 심볼리케이션이 안 돼 autofix 를 스킵했습니다. 해당 릴리즈의 sourcemap 업로드 상태를 확인해주세요.\n<%s|Sentry 이슈 보기>' \
