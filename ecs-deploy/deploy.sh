@@ -26,7 +26,8 @@ CHECK_COMMAND="${CHECK_COMMAND:-python manage.py migrate --check}"
 STABLE_TIMEOUT="${STABLE_TIMEOUT:-1200}"
 MIGRATE_TIMEOUT="${MIGRATE_TIMEOUT:-1800}"
 SETTLE_SECONDS="${SETTLE_SECONDS:-90}"
-STARTED_BY="ecs-deploy-migrate"
+# 같은 클러스터의 다른 앱·env 배포와는 겹쳐도 된다 → 실행 중 마이그레이션 검사는 app·env 단위로
+STARTED_BY="ecs-deploy-migrate-${APP}-${ENV_KEY}"
 WORK="$(mktemp -d "${RUNNER_TEMP:-/tmp}/ecs-deploy.XXXXXX")"
 
 aws() { command aws --region "$REGION" "$@"; }
