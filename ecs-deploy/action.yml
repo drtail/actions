@@ -1,0 +1,45 @@
+name: 'ECS Deploy'
+description: 'drtail/mochii 공용 ECS 배포 (DRT-7208): 새 revision 등록 → 마이그레이션(check/before/after) → 서비스 하나씩 롤링, 롤백 감지'
+
+# 호출 전에 aws-actions/configure-aws-credentials 로 배포 역할(OIDC)을 맡고, 이미지를 ECR 에 올려 둔다.
+#
+#   - uses: drtail/actions/ecs-deploy@main
+#     with:
+#       region: us-west-2
+#       cluster: platform-prod
+#       app: mochii
+#       env_key: prod
+#       images: api=<ecr>/mochii-server:api-<sha>,worker=<ecr>/mochii-server:worker-<sha>
+#       services: api:api,worker:worker,beat:worker     # 배포 순서
+#       migrate_mode: check                               # check | before | after | none
+
+inputs:
+  region: {required: true, description: 'AWS 리전'}
+  cluster: {required: true, description: 'ECS 클러스터 (platform-dev | platform-prod)'}
+  app: {required: true, description: 'drtail | mochii'}
+  env_key: {required: true, description: 'prod | dev-1 | dev1 | dev2 (서비스 이름 {app}-{env_key}-{service})'}
+  images: {required: true, description: '이미지 종류=URI 목록, 쉼표 구분 (예: api=...:tag,worker=...:tag)'}
+  services: {required: true, description: '서비스:이미지종류 목록, 배포 순서대로 (예: api:api,worker:worker,beat:worker)'}
+  migrate_mode: {required: false, default: 'check', description: 'check | before | after | none'}
+  migrate_service: {required: false, default: 'api', description: '마이그레이션 one-off task 에 쓸 서비스의 task definition'}
+  migrate_command: {required: false, default: 'python manage.py migrate --noinput'}
+  check_command: {required: false, default: 'python manage.py migrate --check'}
+  stable_timeout: {required: false, default: '1200', description: '서비스 하나당 안정화 대기 초'}
+
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      env:
+        REGION: ${{ inputs.region }}
+        CLUSTER: ${{ inputs.cluster }}
+        APP: ${{ inputs.app }}
+        ENV_KEY: ${{ inputs.env_key }}
+        IMAGES: ${{ inputs.images }}
+        SERVICES: ${{ inputs.services }}
+        MIGRATE_MODE: ${{ inputs.migrate_mode }}
+        MIGRATE_SERVICE: ${{ inputs.migrate_service }}
+        MIGRATE_COMMAND: ${{ inputs.migrate_command }}
+        CHECK_COMMAND: ${{ inputs.check_command }}
+        STABLE_TIMEOUT: ${{ inputs.stable_timeout }}
+      run: ${{ github.action_path }}/deploy.sh
