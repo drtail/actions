@@ -1,0 +1,53 @@
+name: 'ECS Deploy'
+description: 'drtail/mochii 공용 ECS 배포 (DRT-7208): 새 revision 등록 → 마이그레이션(check/before/after) → 서비스 하나씩 롤링, 롤백 감지'
+
+# 호출 전에 aws-actions/configure-aws-credentials 로 배포 역할(OIDC)을 맡고, 이미지를 ECR 에 올려 둔다.
+# 호출 job 에는 반드시 concurrency 를 건다 (같은 app·env 배포가 겹치면 SSM 태그·마이그레이션이 꼬인다):
+#   concurrency: {group: ecs-deploy-<app>-<env_key>, cancel-in-progress: false}
+#   (cancel-in-progress: true 금지 — 마이그레이션 도중 러너가 죽는다)
+# 이미지 태그(SSM /deploy/...)는 모든 서비스가 안정화된 뒤에만 기록된다. 실패하면 그대로 남는다.
+#
+#   - uses: drtail/actions/ecs-deploy@main
+#     with:
+#       region: us-west-2
+#       cluster: platform-prod
+#       app: mochii
+#       env_key: prod
+#       images: api=<ecr>/mochii-server:api-<sha>,worker=<ecr>/mochii-server:worker-<sha>
+#       services: api:api,worker:worker,beat:worker     # 배포 순서
+#       migrate_mode: check                               # check | before | after | none
+
+inputs:
+  region: {required: true, description: 'AWS 리전'}
+  cluster: {required: true, description: 'ECS 클러스터 (platform-dev | platform-prod)'}
+  app: {required: true, description: 'drtail | mochii'}
+  env_key: {required: true, description: 'prod | dev-1 | dev1 | dev2 (서비스 이름 {app}-{env_key}-{service})'}
+  images: {required: true, description: '이미지 종류=URI 목록, 쉼표 구분 (예: api=...:tag,worker=...:tag)'}
+  services: {required: true, description: '서비스:이미지종류 목록, 배포 순서대로 (예: api:api,worker:worker,beat:worker)'}
+  migrate_mode: {required: false, default: 'check', description: 'check | before | after | none'}
+  migrate_service: {required: false, default: 'api', description: '마이그레이션 one-off task 에 쓸 서비스의 task definition'}
+  migrate_command: {required: false, default: 'python manage.py migrate --noinput'}
+  check_command: {required: false, default: 'python manage.py migrate --check'}
+  stable_timeout: {required: false, default: '1200', description: '서비스 하나당 안정화 대기 초'}
+  migrate_timeout: {required: false, default: '1800', description: '마이그레이션 one-off task 대기 초 (넘으면 실패, 실행 중인 task 는 죽이지 않음)'}
+  settle_seconds: {required: false, default: '90', description: '완료 뒤 새 task 가 죽지 않는지 지켜보는 초 (worker·beat 는 헬스체크가 없어서)'}
+
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      env:
+        REGION: ${{ inputs.region }}
+        CLUSTER: ${{ inputs.cluster }}
+        APP: ${{ inputs.app }}
+        ENV_KEY: ${{ inputs.env_key }}
+        IMAGES: ${{ inputs.images }}
+        SERVICES: ${{ inputs.services }}
+        MIGRATE_MODE: ${{ inputs.migrate_mode }}
+        MIGRATE_SERVICE: ${{ inputs.migrate_service }}
+        MIGRATE_COMMAND: ${{ inputs.migrate_command }}
+        CHECK_COMMAND: ${{ inputs.check_command }}
+        STABLE_TIMEOUT: ${{ inputs.stable_timeout }}
+        MIGRATE_TIMEOUT: ${{ inputs.migrate_timeout }}
+        SETTLE_SECONDS: ${{ inputs.settle_seconds }}
+      run: ${{ github.action_path }}/deploy.sh
