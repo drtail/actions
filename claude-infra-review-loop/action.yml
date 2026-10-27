@@ -1,0 +1,464 @@
+name: 'Claude Infra Code Review (Loop)'
+description: 'AI review for AWS CDK infrastructure PRs (drtail/infra) — same review-reflect loop as the Django action, infra-specific prompt'
+author: 'drtail'
+
+inputs:
+  anthropic_api_key:
+    description: 'Anthropic API Key'
+    required: true
+  github_token:
+    description: 'GitHub Token for PR operations'
+    required: true
+  review_language:
+    description: 'Language for review output'
+    required: false
+    default: 'Korean'
+  trigger_label:
+    description: 'Label name that triggers the review'
+    required: false
+    default: '🤖 AI Review'
+  allowed_bots:
+    description: 'Comma-separated list of bot names allowed to trigger review'
+    required: false
+    default: ''
+  linear_api_key:
+    description: 'Linear API key (org secret) — resolves linked Linear issues for AC context'
+    required: false
+    default: ''
+  slack_bot_token:
+    description: 'Slack bot token (org secret) — resolves linked Slack threads'
+    required: false
+    default: ''
+  notion_api_key:
+    description: 'Notion integration token (org secret) — resolves linked Notion pages'
+    required: false
+    default: ''
+  sentry_api_token:
+    description: 'Sentry API token (org secret) — resolves linked Sentry issues'
+    required: false
+    default: ''
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+
+    - name: Count rounds
+      id: count_rounds
+      uses: actions/github-script@v7
+      with:
+        github-token: ${{ inputs.github_token }}
+        script: |
+          let currentRound = 1;
+          let page = 1;
+          const maxPages = 3;
+
+          while (page <= maxPages) {
+            const comments = await github.rest.issues.listComments({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              per_page: 100,
+              page: page
+            });
+
+            if (comments.data.length === 0) break;
+
+            for (const comment of comments.data) {
+              if (
+                comment.user.type === 'Bot' &&
+                comment.body &&
+                comment.body.includes('<!-- ai-review-round:')
+              ) {
+                currentRound++;
+              }
+            }
+
+            if (comments.data.length < 100) break;
+            page++;
+          }
+
+          core.setOutput('round_number', currentRound);
+          console.log(`Current round: ${currentRound}`);
+
+    - name: Check max rounds
+      id: check_max_rounds
+      uses: actions/github-script@v7
+      with:
+        github-token: ${{ inputs.github_token }}
+        script: |
+          const roundNumber = parseInt('${{ steps.count_rounds.outputs.round_number }}');
+
+          if (roundNumber > 8) {
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body: '## 🔄 AI Review 최대 회차 초과\n\n8회차 리뷰가 완료되었습니다. 더 이상 자동 리뷰를 진행하지 않습니다. 개발자가 직접 검토해 주세요.'
+            });
+            console.log('Max rounds exceeded. Setting skip flag.');
+            core.setOutput('should_skip', 'true');
+          } else {
+            console.log(`Round ${roundNumber} - proceeding with review`);
+            core.setOutput('should_skip', 'false');
+          }
+
+    - name: Fetch previous reviews
+      id: fetch_previous_reviews
+      if: steps.check_max_rounds.outputs.should_skip != 'true'
+      uses: actions/github-script@v7
+      with:
+        github-token: ${{ inputs.github_token }}
+        script: |
+          let page = 1;
+          const maxPages = 3;
+          const reviewComments = [];
+
+          while (page <= maxPages) {
+            const comments = await github.rest.issues.listComments({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              per_page: 100,
+              page: page
+            });
+
+            if (comments.data.length === 0) break;
+
+            for (const comment of comments.data) {
+              if (
+                comment.user.type === 'Bot' &&
+                comment.body &&
+                comment.body.includes('<!-- ai-review-round:')
+              ) {
+                const match = comment.body.match(/<!-- ai-review-round:\s*(\d+)\s*-->/);
+                const roundNum = match ? parseInt(match[1]) : 0;
+                reviewComments.push({ round: roundNum, body: comment.body });
+              }
+            }
+
+            if (comments.data.length < 100) break;
+            page++;
+          }
+
+          reviewComments.sort((a, b) => a.round - b.round);
+          const recent = reviewComments.slice(-2);
+
+          let combinedText = '';
+          for (const review of recent) {
+            const truncated = review.body.length > 3000
+              ? review.body.substring(0, 3000) + '...(truncated)'
+              : review.body;
+            combinedText += `[회차 ${review.round} 리뷰]\n${truncated}\n\n`;
+          }
+
+          core.setOutput('previous_reviews', combinedText);
+          console.log(`Fetched ${recent.length} previous review(s)`);
+
+    - name: Minimize old comments
+      if: steps.check_max_rounds.outputs.should_skip != 'true'
+      uses: actions/github-script@v7
+      with:
+        github-token: ${{ inputs.github_token }}
+        script: |
+          let page = 1;
+          const maxPages = 3;
+
+          while (page <= maxPages) {
+            const comments = await github.rest.issues.listComments({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              per_page: 100,
+              page: page
+            });
+
+            if (comments.data.length === 0) break;
+
+            for (const comment of comments.data) {
+              if (comment.body && comment.body.includes('Claude Infra Code Review')) {
+                try {
+                  await github.graphql(`
+                    mutation($id: ID!) {
+                      minimizeComment(input: {subjectId: $id, classifier: OUTDATED}) {
+                        clientMutationId
+                      }
+                    }
+                  `, { id: comment.node_id });
+                  console.log(`Minimized comment ${comment.id} by ${comment.user.login}`);
+                } catch (error) {
+                  console.log(`Failed to minimize comment ${comment.id}: ${error.message}`);
+                }
+              }
+            }
+
+            if (comments.data.length < 100) break;
+            page++;
+          }
+
+    - name: Parse ignore list
+      id: parse_ignore_list
+      if: steps.check_max_rounds.outputs.should_skip != 'true'
+      uses: actions/github-script@v7
+      with:
+        github-token: ${{ inputs.github_token }}
+        script: |
+          const body = context.payload.pull_request.body || '';
+          const items = [];
+
+          const sectionMatch = body.match(/# 🚫 AI Review Ignore([\s\S]*?)(?=\n# |$)/);
+          if (sectionMatch) {
+            const sectionContent = sectionMatch[1];
+            const lines = sectionContent.split('\n');
+            for (const line of lines) {
+              const trimmed = line.trim();
+              if (trimmed.startsWith('- [P2]')) {
+                items.push(trimmed);
+              }
+            }
+          }
+
+          core.setOutput('ignore_list', JSON.stringify(items));
+          core.setOutput('ignore_count', items.length.toString());
+          console.log(`Parsed ${items.length} ignore item(s)`);
+
+    - name: Fetch external context (Linear/Slack/Notion/Sentry)
+      if: steps.check_max_rounds.outputs.should_skip != 'true'
+      shell: bash
+      env:
+        PR_BODY: ${{ github.event.pull_request.body }}
+        LINEAR_API_KEY: ${{ inputs.linear_api_key }}
+        SLACK_BOT_TOKEN: ${{ inputs.slack_bot_token }}
+        NOTION_API_KEY: ${{ inputs.notion_api_key }}
+        SENTRY_API_TOKEN: ${{ inputs.sentry_api_token }}
+      run: |
+        python3 "${GITHUB_ACTION_PATH}/../scripts/fetch_pr_context.py" || echo "context fetch skipped (non-fatal)"
+
+    - name: Pick review model/effort by PR size
+      id: tier
+      if: steps.check_max_rounds.outputs.should_skip != 'true'
+      uses: actions/github-script@v7
+      env:
+        ACTION_DIR: ${{ github.action_path }}
+      with:
+        github-token: ${{ inputs.github_token }}
+        script: |
+          const pick = require(`${process.env.ACTION_DIR}/../scripts/review_tier.js`);
+          const { lines, split } = await pick({ github, context, core, profile: 'small' });
+          // 500줄 초과: 관점별 하위 리뷰어(Agent 도구)로 나눠 보고 합친다 (DRT-6999).
+          const fs = require('fs');
+          const splitPrompt = split
+            ? fs.readFileSync(`${process.env.ACTION_DIR}/split-review.md`, 'utf8').replace('__LINES__', String(lines))
+            : '';
+          core.setOutput('split_prompt', splitPrompt);
+          core.setOutput('extra_tools', split ? ',Agent,Task' : '');
+
+    - name: Generate Infra Code Review
+      if: steps.check_max_rounds.outputs.should_skip != 'true'
+      uses: anthropics/claude-code-action@v1
+      env:
+        # 분할 리뷰의 하위 리뷰어(Agent)를 앞단에서 돌려 결과가 같은 턴에 돌아오게 한다.
+        # 헤드리스 실행은 메인 턴이 끝나면 종료돼, 백그라운드 하위 리뷰어를 기다리지 않으면
+        # 리뷰 파일 없이 끝난다 (DRT-6999 실측: 'agents report back' 후 종료 → ENOENT).
+        CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: '1'
+        CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS: '900000'
+      with:
+        anthropic_api_key: ${{ inputs.anthropic_api_key }}
+        allowed_bots: ${{ inputs.allowed_bots }}
+        show_full_output: true
+        prompt: |
+          REVIEW CONTEXT:
+          - Current round: ${{ steps.count_rounds.outputs.round_number }}
+          - Previous reviews: ${{ steps.fetch_previous_reviews.outputs.previous_reviews }}
+          - Ignore list (P2 items author marked as acceptable): ${{ steps.parse_ignore_list.outputs.ignore_list }}
+          - Review mode: ${{ steps.tier.outputs.split == 'true' && 'SPLIT (see SPLIT REVIEW MODE below)' || 'single reviewer' }}
+          - External context: a file `.pr-context.md` in the repo root may hold the linked Linear issue(s) and Slack/Notion/Sentry content resolved from the PR description. If it exists, READ IT FIRST with the Read tool — it is the source of truth for what this PR must deliver. Do NOT invent context for links it reports as failed/unreadable.
+
+          SCOPE — Items already covered elsewhere (DO NOT report these):
+          - Code style/formatting, naming taste, wording of comments/docstrings/Korean text
+          - Whether tests pass → covered by CI `make test` (CDK contract tests + deploy guard tests)
+          CONFIDENCE: if you are speculating ("could potentially…", "might…") and cannot name the line and the concrete failure, it is at most `[P3]` — never P1/P2.
+          DO report: anything that can take down or silently weaken production/dev infrastructure, lose data, open access, or raise cost.
+
+          If round 2+, focus on:
+          1. Whether previous P1/P2 issues have been resolved
+          2. New issues introduced since last review
+          3. P1 items in ignore list are invalid — flag them
+
+          **Acceptance Criteria (REQUIRED CHECK):** The PR description's Acceptance Criteria (- [ ] checkboxes) are this PR's contract. Cross-check them against BOTH the linked Linear issue in `.pr-context.md` and the actual diff:
+          - Every AC must be fully implemented by this PR — verify each against the code (cite file:line). Missing or partial AC → `[P1]`.
+          - The PR must implement its AC exactly — no more, no less. Flag scope creep (substantive changes with no matching AC) as `[P2]`.
+          - If the PR's AC diverge from the linked Linear issue's acceptance criteria, flag the mismatch.
+
+          ${{ steps.tier.outputs.split_prompt }}
+
+          ---
+
+          REPO: ${{ github.repository }}
+          PR NUMBER: ${{ github.event.pull_request.number }}
+
+          You are a senior AWS infrastructure engineer reviewing an AWS CDK (Python) PR in the company's single infrastructure repo.
+          First read README.md (principles, env model, stack ownership), and skim runbooks/ and legacy/inventory.md. Apply the repo's principles: every AWS resource is managed by CDK (no console changes), existing resources are adopted with `cdk import`, deploys go only through `make cdk-deploy` (change-set + deploy guard `cdk/scripts/deploy_guard.py`).
+
+          REQUIRED INPUT — the CI `cdk diff`: run `gh pr view ${{ github.event.pull_request.number }} --comments` and find the comment starting with `<!-- cdk-diff -->`. It shows, per env (prod/dev1/dev2), which stacks differ between this PR's code and what is DEPLOYED. Use it to check:
+          - Stacks this PR touches should appear; stacks it does NOT touch appearing with differences means pre-existing drift — mention only if this PR makes it worse.
+          - Many PRs here are deployed from the branch BEFORE merge; if the PR says it is already deployed, its own stacks should show NO differences. If they do, that is `[P1]` (merging would revert or change live infra).
+
+          **Critical Analysis Areas (in priority order):**
+
+          1. **Deployment safety / data loss (HIGHEST PRIORITY):**
+             - Any change that causes REPLACEMENT of stateful resources (RDS, ElastiCache, EBS, EB environments, S3 buckets, SGs referenced by DBs, hosted zones): renamed logical IDs, changed construct paths, replacement-only properties (e.g. RDS DBInstanceIdentifier/Engine/KmsKeyId/StorageEncrypted/DBSubnetGroupName/AvailabilityZone).
+             - Removal/UpdateReplace policies: data resources and anything adopted via `cdk import` must be RETAIN (SNAPSHOT deletes the instance). Deletion protection on prod data.
+             - `cdk import`: template values must match the real resource exactly (defaults that differ get applied on the next deploy); import stacks must not contain non-importable resources.
+             - Ordering/dependency problems that fail a first deploy (e.g. cross-VPC SG references before peering is active, ECS services before the listener rule exists).
+             - Changes that would surprise the deploy guard or require ALLOW_* flags — say which and why it is safe or not.
+
+          2. **Security:**
+             - IAM: wildcards on actions/resources, iam:PassRole scope, OIDC trust (`sub` must be pinned to repo + ref/event, immutable-subject format for new repos), roles that can read secrets/env vars/logs/images (ReadOnlyAccess includes these).
+             - Network: SG ingress from 0.0.0.0/0 (other than ALB 80/443), publicly accessible databases, missing encryption.
+             - Secrets or credentials committed in code/config (ARNs and resource IDs are fine).
+
+          3. **Availability / operations:**
+             - ECS: deployment config (minHealthy/maxHealthy, beat must be 0/100), circuit breaker, health check path/thresholds, stopTimeout vs gunicorn graceful timeout vs ALB deregistration delay.
+             - Capacity: sum of task CPU/memory reservations + deploy surge vs host capacity (one host per env is the design; anything that forces a second host breaks the cost goal).
+             - Alarms: correct namespace/metric/dimensions/statistic, TreatMissingData (single-host design → missing data usually means outage), alarm actions actually able to publish (SNS topic policy must allow cloudwatch.amazonaws.com / events.amazonaws.com).
+             - Lookups and cdk.context.json staleness, cross-stack/cross-region references that create export lock-in.
+
+          4. **Cost:** new always-on resources and their approximate monthly cost (instances, NAT gateways, public IPv4, ALBs, RDS/ElastiCache sizes, log retention, cross-AZ traffic). This repo exists to cut AWS cost; call out anything that adds recurring cost without saying so in the PR.
+
+          5. **Repo consistency:** README / runbooks / legacy/inventory.md updated when behavior or ownership changes; config values per env (dev1/dev2/prod) consistent; no console-only steps left undocumented.
+
+          **Priority Levels (Pn Rule):**
+          - **P1**: Critical bugs - security vulnerabilities, data loss, crashes (MUST fix)
+          - **P2**: Convention violations, performance issues requiring improvement (SHOULD fix)
+          - **P3**: Suggested improvements, better practices (COULD fix)
+          - **P4**: Minor suggestions, style preferences (CONSIDER)
+          - **P5**: Nitpicks, optional enhancements (FYI)
+
+          **Review Decision Criteria:**
+          - P1 or P2 issues found → REQUEST_CHANGES
+          - Only P3-P5 issues found → COMMENT
+          - All good → APPROVE
+
+          **Output Requirements:**
+          - Write entire review in ${{ inputs.review_language }}
+          - Start with review decision header (## ❌ REQUEST CHANGES / ## 💬 COMMENT / ## ✅ APPROVED)
+          - Format each review item: `` `[Pn]` `` badge (backtick-wrapped) + descriptive title, file:line reference, explanation
+          - Group related items under category headings
+          - End with conclusion section restating the decision
+                    - Use the backtick `[Pn]` badge ONLY for issues that are still open in this round. When you mention a previous round's item that is now resolved, write it without backticks (e.g. "P2 (해소)").
+          - The LAST line of the file must be exactly: `<!-- open-issues: P1=<n> P2=<n> -->` where <n> counts only issues still open in this round (P2 items covered by the ignore list still count; the workflow subtracts them).
+          - Provide concrete code examples where helpful
+
+          **Self-Check Before Finalizing:**
+          - Re-read the PR diff and confirm every changed file is covered
+          - Confirm every stateful resource change was checked for replacement/deletion
+          - Confirm the cdk diff comment was read and matches the PR's claims
+          - Confirm no security issues were overlooked
+          - Confirm file:line references are accurate
+
+          IMPORTANT: Never write files to /tmp/ or any directory outside the repository root.
+
+          Save your ${{ inputs.review_language }} review to a file named '.claude-code-review.md' using Write tool. Do NOT post to PR yet.
+
+        claude_args: '--model ${{ steps.tier.outputs.model }} --effort ${{ steps.tier.outputs.effort }} --allowed-tools "Bash(gh pr diff:*),Bash(gh pr view:*),Bash(gh pr list:*),Write,Read,Glob,Grep${{ steps.tier.outputs.extra_tools }}"'
+
+    - name: Post review with marker
+      if: steps.check_max_rounds.outputs.should_skip != 'true'
+      uses: actions/github-script@v7
+      with:
+        github-token: ${{ inputs.github_token }}
+        script: |
+          const fs = require('fs');
+
+          let review;
+          try {
+            review = fs.readFileSync('.claude-code-review.md', 'utf8');
+          } catch (error) {
+            console.error('Failed to read .claude-code-review.md:', error);
+            core.setFailed('Review file not found. Claude review may have failed.');
+            return;
+          }
+
+          const roundNumber = '${{ steps.count_rounds.outputs.round_number }}';
+
+          await github.rest.issues.createComment({
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            issue_number: context.issue.number,
+            body: `## Claude Infra Code Review (Round ${roundNumber})\n\n${review}\n\n<sub>🧠 ${{ steps.tier.outputs.model }} · effort ${{ steps.tier.outputs.effort }} · ${{ steps.tier.outputs.lines }}줄 (lock 파일 제외)</sub>\n\n<!-- reviewed-sha: ${{ github.event.pull_request.head.sha }} -->\n<!-- ai-review-round: ${roundNumber} -->`
+          });
+
+          console.log(`Review posted successfully (Round ${roundNumber})`);
+
+    - name: Evaluate approve/reject
+      if: steps.check_max_rounds.outputs.should_skip != 'true'
+      uses: actions/github-script@v7
+      env:
+        IGNORE_COUNT: ${{ steps.parse_ignore_list.outputs.ignore_count }}
+      with:
+        github-token: ${{ inputs.github_token }}
+        script: |
+          const fs = require('fs');
+
+          let review;
+          try {
+            review = fs.readFileSync('.claude-code-review.md', 'utf8');
+          } catch (error) {
+            console.log('Could not read review file for evaluation');
+            return;
+          }
+
+          const roundNumber = parseInt('${{ steps.count_rounds.outputs.round_number }}');
+          // 리뷰어가 남긴 '열린 지적 수' 마커를 우선 쓴다. 본문의 `[P2]` 를 글자 그대로 세면
+          // 회차 2 이상에서 "`[P2]` → 해소" 처럼 해결된 항목까지 세어져 승인이 영영 안 난다
+          // (mochii-server#1007 Round 2 실측: 열린 지적 0건인데 P2 count 3). 마커가 없으면 예전 방식.
+          const marker = review.match(/<!--\s*open-issues:\s*P1=(\d+)\s+P2=(\d+)\s*-->/);
+          const hasP1 = marker ? parseInt(marker[1]) > 0 : /`\[P1\]`/.test(review);
+          const p2Count = marker ? parseInt(marker[2]) : (review.match(/`\[P2\]`/g) || []).length;
+          console.log(`open-issues marker: ${marker ? marker[0] : 'missing — falling back to badge count'}`);
+          const ignoreCount = parseInt(process.env.IGNORE_COUNT || '0');
+
+          console.log(`Round: ${roundNumber}, P1: ${hasP1}, P2 count: ${p2Count}, IgnoreCount: ${ignoreCount}`);
+
+          // P1 is never ignorable; approve (any round) when no P1 and P2 count covered by ignore list.
+          // Round 1 approval ends the loop — matches the team rule "R1 APPROVED 면 종료" (DRT-6998).
+          if (!hasP1 && (p2Count === 0 || p2Count <= ignoreCount)) {
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body: `## ✅ AI Review APPROVED\n\n${roundNumber}회차 리뷰 완료. P1 없음, P2 ${p2Count}건 (무시 사유 ${ignoreCount}건). LGTM!`
+            });
+            console.log('APPROVED comment posted');
+          } else {
+            console.log('Not approved yet - P1 or unignored P2 remain');
+          }
+
+    - name: Remove AI Review label
+      if: success()
+      uses: actions/github-script@v7
+      with:
+        github-token: ${{ inputs.github_token }}
+        script: |
+          try {
+            await github.rest.issues.removeLabel({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              name: '${{ inputs.trigger_label }}'
+            });
+            console.log('Removed "${{ inputs.trigger_label }}" label after successful review');
+          } catch (error) {
+            console.log(`Failed to remove label: ${error.message}`);
+          }
+
+    - name: Cleanup review files
+      if: always()
+      shell: bash
+      run: |
+        rm -f .claude-code-review*.md .pr-context.md
+        echo "Cleaned up review files"

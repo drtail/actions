@@ -118,6 +118,13 @@ reported under "수집 실패" in `.pr-context.md` so the reviewer never guesses
 | big PR (`claude-parent-review`) | ≤ 2000 | `claude-opus-5-5` | `high` |
 | | > 2000 | `claude-opus-5-5` | `xhigh` |
 
+### 4i. claude-infra-review-loop — drtail/infra (AWS CDK)
+
+`claude-django-review-loop` 과 같은 루프(라운드 집계·무시 목록·승인 판정·Linear 맥락·분할 리뷰)에
+리뷰 관점만 인프라용으로 바꾼 액션. 배포 안전(상태 리소스 교체·삭제 정책·`cdk import`), 보안(IAM·OIDC·SG),
+가용성(ECS 배포·용량·알람), 비용을 보고, CI 가 단 `<!-- cdk-diff -->` 댓글로 "배포된 상태와 코드가 같은지"를
+대조한다. 입력은 4a 와 같다.
+
 ### 4a. claude-django-review-loop — small PR (base ≠ trunk)
 
 Review-reflect-re-review loop (ends on the first APPROVED round, max 5 rounds). Verifies the PR's Acceptance Criteria are
