@@ -134,9 +134,9 @@ run_oneoff() {
     [ "$status" != "$last" ] && { echo "  $(date +%H:%M:%S) $status"; last="$status"; }
     [ "$status" = STOPPED ] && break
     if [ $SECONDS -ge $deadline ]; then
-      if [ "$status" = RUNNING ]; then
+      if [ "$status" != PROVISIONING ] && [ "$status" != PENDING ] && [ "$status" != ACTIVATING ]; then
         echo "::endgroup::"
-        echo "::error::$desc 가 ${MIGRATE_TIMEOUT}초 안에 끝나지 않았습니다. task ${task##*/} 는 아직 실행 중입니다 — 끝날 때까지 다시 실행하지 마세요"
+        echo "::error::$desc 가 ${MIGRATE_TIMEOUT}초 안에 끝나지 않았습니다 (상태 ${status:-조회 실패}). task ${task##*/} 는 죽이지 않았습니다 — 끝날 때까지 다시 실행하지 마세요"
         return 2
       fi
       aws ecs stop-task --cluster "$CLUSTER" --task "$task" --reason "ecs-deploy: not started in time" >/dev/null || true
@@ -175,7 +175,6 @@ fi
 # ---------- 3. 서비스 롤링 (하나씩) ----------
 for svc in "${SVC_NAMES[@]}"; do
   name=$(full "$svc"); echo "::group::배포: $name"
-  start_epoch=$(date +%s)
   dep=$(aws ecs update-service --cluster "$CLUSTER" --service "$name" --task-definition "${NEW_TD[$svc]}" \
     --query 'service.deployments[?status==`PRIMARY`].id|[0]' --output text)
   deadline=$((SECONDS + STABLE_TIMEOUT))
@@ -203,15 +202,15 @@ for svc in "${SVC_NAMES[@]}"; do
     out=$(q ecs describe-services --cluster "$CLUSTER" --services "$name" \
       --query 'services[0].[runningCount,desiredCount,taskDefinition]' --output text)
     read -r run des cur <<< "$out"
-    stopped=$(q ecs list-tasks --cluster "$CLUSTER" --service-name "$name" --desired-status STOPPED --query 'taskArns' --output text)
+    # 새 revision 은 이번 실행에서만 쓰므로, 그 revision 으로 멈춘 task 가 있으면 = 새 버전이 죽은 것
+    mapfile -t stopped < <(q ecs list-tasks --cluster "$CLUSTER" --service-name "$name" \
+      --desired-status STOPPED --query 'taskArns[]' --output text | tr '\t' '\n' | grep -v '^None$' | grep -v '^$' || true)
     crashed=0
-    if [ -n "$stopped" ] && [ "$stopped" != None ]; then
-      crashed=$(q ecs describe-tasks --cluster "$CLUSTER" --tasks $stopped --output json | python3 -c '
-import json, sys
-new, since = sys.argv[1], float(sys.argv[2])
-print(sum(1 for t in json.load(sys.stdin)["tasks"]
-          if t["taskDefinitionArn"] == new and t.get("stoppedAt", 0) >= since))' "${NEW_TD[$svc]}" "$start_epoch")
-    fi
+    for ((i = 0; i < ${#stopped[@]}; i += 100)); do
+      n=$(q ecs describe-tasks --cluster "$CLUSTER" --tasks "${stopped[@]:i:100}" \
+        --query "length(tasks[?taskDefinitionArn=='${NEW_TD[$svc]}'])" --output text)
+      crashed=$((crashed + n))
+    done
     if [ "$run" != "$des" ] || [ "$cur" != "${NEW_TD[$svc]}" ] || [ "$crashed" != 0 ]; then
       echo "::endgroup::"; fail "$name: 새 task 가 안정적이지 않습니다 (running $run/$des, 새 버전으로 멈춘 task $crashed)"
     fi
@@ -220,10 +219,14 @@ print(sum(1 for t in json.load(sys.stdin)["tasks"]
 done
 
 # ---------- 4. 이미지 태그 기록 (전부 성공한 뒤에만) ----------
-for kind in "${!IMAGE_OF[@]}"; do
+# 이번에 실제로 배포한 서비스의 이미지 종류만 (배포하지 않은 kind 를 다음 cdk deploy 가 검증 없이 올리지 않게)
+declare -A DEPLOYED_KIND
+for svc in "${SVC_NAMES[@]}"; do DEPLOYED_KIND[${KIND_OF[$svc]}]=1; done
+for kind in "${!DEPLOYED_KIND[@]}"; do
   uri="${IMAGE_OF[$kind]}"
-  aws ssm put-parameter --name "/deploy/${ENV_KEY}/${APP}/${kind}-image-tag" \
-    --type String --overwrite --value "${uri##*:}" >/dev/null
+  q ssm put-parameter --name "/deploy/${ENV_KEY}/${APP}/${kind}-image-tag" \
+    --type String --overwrite --value "${uri##*:}" >/dev/null || {
+    echo "::error::서비스는 새 버전인데 SSM /deploy/${ENV_KEY}/${APP}/${kind}-image-tag 기록에 실패했습니다. 다음 cdk deploy 전에 직접 '${uri##*:}' 로 맞춰 주세요"; exit 1; }
   echo "SSM /deploy/${ENV_KEY}/${APP}/${kind}-image-tag = ${uri##*:}"
 done
 
