@@ -9,6 +9,7 @@
 #    - after : 배포 후에 `migrate` (DROP 류. 배포 전 확인은 하지 않음)
 #    - none  : 안 함
 # 3. 서비스를 순서대로 하나씩 update-service → 완료 → SETTLE 초 동안 새 task 가 죽지 않는지 확인
+#    (rollout=parallel 이면 전부 동시에 update → 모두 완료 → SETTLE 한 번. dev 전용 옵트인)
 #    (worker·beat 는 ALB 헬스체크가 없어 "떠 있다" 만으로 완료가 되므로 이 확인이 필요하다)
 # 4. 모든 서비스가 끝난 뒤에만 이미지 태그를 SSM /deploy/<env>/<app>/<kind>-image-tag 에 기록
 #    (CDK 서비스 스택이 이 값을 읽는다. 실패한 배포의 태그가 남으면 다음 cdk deploy 가 그걸 올린다)
@@ -26,6 +27,7 @@ CHECK_COMMAND="${CHECK_COMMAND:-python manage.py migrate --check}"
 STABLE_TIMEOUT="${STABLE_TIMEOUT:-1200}"
 MIGRATE_TIMEOUT="${MIGRATE_TIMEOUT:-1800}"
 SETTLE_SECONDS="${SETTLE_SECONDS:-90}"
+ROLLOUT="${ROLLOUT:-sequential}"
 # 같은 클러스터의 다른 앱·env 배포와는 겹쳐도 된다 → 실행 중 마이그레이션 검사는 app·env 단위로
 STARTED_BY="ecs-deploy-migrate-${APP}-${ENV_KEY}"
 WORK="$(mktemp -d "${RUNNER_TEMP:-/tmp}/ecs-deploy.XXXXXX")"
@@ -56,6 +58,7 @@ for e in "${entries[@]}"; do
 done
 [ ${#SVC_NAMES[@]} -gt 0 ] || { echo "::error::services 가 비어 있습니다"; exit 1; }
 case "$MIGRATE_MODE" in check|before|after|none) ;; *) echo "::error::알 수 없는 migrate_mode=$MIGRATE_MODE"; exit 1;; esac
+case "$ROLLOUT" in sequential|parallel) ;; *) echo "::error::알 수 없는 rollout=$ROLLOUT (sequential | parallel)"; exit 1;; esac
 if [ "$MIGRATE_MODE" != none ] && [ -z "${KIND_OF[$MIGRATE_SERVICE]:-}" ]; then
   echo "::error::migrate_service=$MIGRATE_SERVICE 가 services 에 없습니다"; exit 1
 fi
@@ -173,51 +176,92 @@ elif [ "$MIGRATE_MODE" = before ]; then
   [ $rc = 0 ] || fail "배포 전 migrate 실패 — 서비스는 바꾸지 않았습니다"
 fi
 
-# ---------- 3. 서비스 롤링 (하나씩) ----------
-for svc in "${SVC_NAMES[@]}"; do
-  name=$(full "$svc"); echo "::group::배포: $name"
-  dep=$(aws ecs update-service --cluster "$CLUSTER" --service "$name" --task-definition "${NEW_TD[$svc]}" \
+# ---------- 3. 서비스 교체 ----------
+# rollout=sequential(기본): 하나씩 update → 완료 → settle. prod 는 이 동작 그대로.
+# rollout=parallel(dev 전용 옵트인): 전부 update → 모두 완료 대기 → settle 을 한 번만. 다운타임을 허용하는 dev 에서
+#   배포 시간을 줄이려는 것이다(서비스별 완료·롤백·새 task 생존 확인은 sequential 과 같다).
+start_update() {  # $1=svc → DEP_ID[$svc]
+  local name; name=$(full "$1")
+  DEP_ID[$1]=$(aws ecs update-service --cluster "$CLUSTER" --service "$name" --task-definition "${NEW_TD[$1]}" \
     --query 'service.deployments[?status==`PRIMARY`].id|[0]' --output text)
-  deadline=$((SECONDS + STABLE_TIMEOUT))
-  while :; do
-    state=$(q ecs describe-services --cluster "$CLUSTER" --services "$name" \
-      --query "services[0].deployments[?id=='$dep'].rolloutState|[0]" --output text)
-    case "$state" in
-      COMPLETED) break ;;
-      FAILED) echo "::endgroup::"; fail "$name 배포 실패 — circuit breaker 가 이전 revision 으로 롤백" ;;
-      None) # 롤백되면 이 deployment 는 목록에서 사라진다
-        primary=$(q ecs describe-services --cluster "$CLUSTER" --services "$name" \
-          --query 'services[0].deployments[?status==`PRIMARY`].[taskDefinition,rolloutState]|[0]' --output text)
-        if [ "${primary%%[[:space:]]*}" = "${NEW_TD[$svc]}" ] && [ "${primary##*[[:space:]]}" = COMPLETED ]; then break; fi
-        cur_td="${primary%%[[:space:]]*}"
-        [ "$cur_td" = "${NEW_TD[$svc]}" ] || { echo "::endgroup::"; fail "$name 롤백됨 (지금 ${cur_td##*/})"; } ;;
-    esac
-    [ $SECONDS -lt $deadline ] || { echo "::endgroup::"; fail "$name 안정화 ${STABLE_TIMEOUT}초 초과 — ECS 배포는 계속 진행 중일 수 있습니다"; }
+  echo "update-service: $name (${NEW_TD[$1]##*/})"
+}
+# 반환: 0 완료 / 1 아직 진행 중. 실패·롤백이면 fail 로 끝낸다
+rollout_done() {
+  local svc="$1" name state primary cur_td; name=$(full "$svc")
+  state=$(q ecs describe-services --cluster "$CLUSTER" --services "$name" \
+    --query "services[0].deployments[?id=='${DEP_ID[$svc]}'].rolloutState|[0]" --output text)
+  case "$state" in
+    COMPLETED) return 0 ;;
+    FAILED) fail "$name 배포 실패 — circuit breaker 가 이전 revision 으로 롤백" ;;
+    None) # 롤백되면 이 deployment 는 목록에서 사라진다
+      primary=$(q ecs describe-services --cluster "$CLUSTER" --services "$name" \
+        --query 'services[0].deployments[?status==`PRIMARY`].[taskDefinition,rolloutState]|[0]' --output text)
+      if [ "${primary%%[[:space:]]*}" = "${NEW_TD[$svc]}" ] && [ "${primary##*[[:space:]]}" = COMPLETED ]; then return 0; fi
+      cur_td="${primary%%[[:space:]]*}"
+      [ "$cur_td" = "${NEW_TD[$svc]}" ] || fail "$name 롤백됨 (지금 ${cur_td##*/})" ;;
+  esac
+  return 1
+}
+# 완료 뒤에도 새 task 가 버티는지 (worker·beat 는 헬스체크가 없어 바로 죽어도 COMPLETED 가 된다). settle 대기는 호출자가 한다
+check_settled() {
+  local svc="$1" name out run des cur crashed n i; name=$(full "$svc")
+  out=$(q ecs describe-services --cluster "$CLUSTER" --services "$name" \
+    --query 'services[0].[runningCount,desiredCount,taskDefinition]' --output text)
+  read -r run des cur <<< "$out"
+  [ "$des" != 0 ] || return 0
+  # 새 revision 은 이번 실행에서만 쓰므로, 그 revision 으로 멈춘 task 가 있으면 = 새 버전이 죽은 것
+  mapfile -t stopped < <(q ecs list-tasks --cluster "$CLUSTER" --service-name "$name" \
+    --desired-status STOPPED --query 'taskArns[]' --output text | tr '\t' '\n' | grep -v '^None$' | grep -v '^$' || true)
+  crashed=0
+  for ((i = 0; i < ${#stopped[@]}; i += 100)); do
+    n=$(q ecs describe-tasks --cluster "$CLUSTER" --tasks "${stopped[@]:i:100}" \
+      --query "length(tasks[?taskDefinitionArn=='${NEW_TD[$svc]}'])" --output text)
+    crashed=$((crashed + n))
+  done
+  if [ "$run" != "$des" ] || [ "$cur" != "${NEW_TD[$svc]}" ] || [ "$crashed" != 0 ]; then
+    fail "$name: 새 task 가 안정적이지 않습니다 (running $run/$des, 새 버전으로 멈춘 task $crashed)"
+  fi
+}
+declare -A DEP_ID
+if [ "$ROLLOUT" = parallel ]; then
+  echo "::group::동시 교체(rollout=parallel): ${SVC_NAMES[*]}"
+  for svc in "${SVC_NAMES[@]}"; do start_update "$svc"; done
+  deadline=$((SECONDS + STABLE_TIMEOUT)); pending=("${SVC_NAMES[@]}")
+  while [ ${#pending[@]} -gt 0 ]; do
+    left=()
+    for svc in "${pending[@]}"; do
+      if rollout_done "$svc"; then echo "$(date +%H:%M:%S) $(full "$svc") 교체 완료"; else left+=("$svc"); fi
+    done
+    pending=("${left[@]}")
+    [ ${#pending[@]} -eq 0 ] && break
+    [ $SECONDS -lt $deadline ] || { echo "::endgroup::"; fail "안정화 ${STABLE_TIMEOUT}초 초과: ${pending[*]} — ECS 배포는 계속 진행 중일 수 있습니다"; }
     sleep 10
   done
-  # 완료 뒤에도 새 task 가 버티는지 (worker·beat 는 헬스체크가 없어 바로 죽어도 COMPLETED 가 된다)
-  desired=$(q ecs describe-services --cluster "$CLUSTER" --services "$name" --query 'services[0].desiredCount' --output text)
-  if [ "$desired" != 0 ] && [ "$SETTLE_SECONDS" -gt 0 ]; then
-    echo "완료. ${SETTLE_SECONDS}초 동안 새 task 가 죽지 않는지 확인"
+  if [ "$SETTLE_SECONDS" -gt 0 ]; then
+    echo "모두 완료. ${SETTLE_SECONDS}초 동안 새 task 가 죽지 않는지 확인(한 번)"
     sleep "$SETTLE_SECONDS"
-    out=$(q ecs describe-services --cluster "$CLUSTER" --services "$name" \
-      --query 'services[0].[runningCount,desiredCount,taskDefinition]' --output text)
-    read -r run des cur <<< "$out"
-    # 새 revision 은 이번 실행에서만 쓰므로, 그 revision 으로 멈춘 task 가 있으면 = 새 버전이 죽은 것
-    mapfile -t stopped < <(q ecs list-tasks --cluster "$CLUSTER" --service-name "$name" \
-      --desired-status STOPPED --query 'taskArns[]' --output text | tr '\t' '\n' | grep -v '^None$' | grep -v '^$' || true)
-    crashed=0
-    for ((i = 0; i < ${#stopped[@]}; i += 100)); do
-      n=$(q ecs describe-tasks --cluster "$CLUSTER" --tasks "${stopped[@]:i:100}" \
-        --query "length(tasks[?taskDefinitionArn=='${NEW_TD[$svc]}'])" --output text)
-      crashed=$((crashed + n))
-    done
-    if [ "$run" != "$des" ] || [ "$cur" != "${NEW_TD[$svc]}" ] || [ "$crashed" != 0 ]; then
-      echo "::endgroup::"; fail "$name: 새 task 가 안정적이지 않습니다 (running $run/$des, 새 버전으로 멈춘 task $crashed)"
-    fi
   fi
-  echo "$name 완료"; echo "::endgroup::"
-done
+  for svc in "${SVC_NAMES[@]}"; do check_settled "$svc"; echo "$(full "$svc") 완료"; done
+  echo "::endgroup::"
+else
+  for svc in "${SVC_NAMES[@]}"; do
+    name=$(full "$svc"); echo "::group::배포: $name"
+    start_update "$svc"
+    deadline=$((SECONDS + STABLE_TIMEOUT))
+    until rollout_done "$svc"; do
+      [ $SECONDS -lt $deadline ] || { echo "::endgroup::"; fail "$name 안정화 ${STABLE_TIMEOUT}초 초과 — ECS 배포는 계속 진행 중일 수 있습니다"; }
+      sleep 10
+    done
+    desired=$(q ecs describe-services --cluster "$CLUSTER" --services "$name" --query 'services[0].desiredCount' --output text)
+    if [ "$desired" != 0 ] && [ "$SETTLE_SECONDS" -gt 0 ]; then
+      echo "완료. ${SETTLE_SECONDS}초 동안 새 task 가 죽지 않는지 확인"
+      sleep "$SETTLE_SECONDS"
+      check_settled "$svc"
+    fi
+    echo "$name 완료"; echo "::endgroup::"
+  done
+fi
 
 # ---------- 4. 이미지 태그 기록 (전부 성공한 뒤에만) ----------
 # 이번에 실제로 배포한 서비스의 이미지 종류만 (배포하지 않은 kind 를 다음 cdk deploy 가 검증 없이 올리지 않게)
