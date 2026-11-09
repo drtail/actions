@@ -31,6 +31,7 @@ inputs:
   stable_timeout: {required: false, default: '1200', description: '서비스 하나당 안정화 대기 초'}
   migrate_timeout: {required: false, default: '1800', description: '마이그레이션 one-off task 대기 초 (넘으면 실패, 실행 중인 task 는 죽이지 않음)'}
   settle_seconds: {required: false, default: '90', description: '완료 뒤 새 task 가 죽지 않는지 지켜보는 초 (worker·beat 는 헬스체크가 없어서)'}
+  rollout: {required: false, default: 'sequential', description: 'sequential(기본, 하나씩) | parallel(전부 동시 교체 후 settle 한 번 — 다운타임을 허용하는 dev 전용. prod 금지)'}
 
 runs:
   using: composite
@@ -50,4 +51,5 @@ runs:
         STABLE_TIMEOUT: ${{ inputs.stable_timeout }}
         MIGRATE_TIMEOUT: ${{ inputs.migrate_timeout }}
         SETTLE_SECONDS: ${{ inputs.settle_seconds }}
+        ROLLOUT: ${{ inputs.rollout }}
       run: ${{ github.action_path }}/deploy.sh
